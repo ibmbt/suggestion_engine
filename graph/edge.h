@@ -42,9 +42,12 @@ public:
     }
 
 
-    void serialize(char* buffer) const;
-    static Edge deserialize(const char* buffer);
-    static const size_t SERIALIZED_SIZE = 33;
+    void serialize(char* buffer) const {
+    }
+
+    static Edge deserialize(const char* buffer) {
+    }
+
 };
 
 #endif // EDGE_H

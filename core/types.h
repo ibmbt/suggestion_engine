@@ -5,9 +5,9 @@
 #include <cstddef>
 
 
-const size_t PAGE_SIZE = 4096;
+const size_t BLOCK_SIZE = 4096;
 const int BTREE_DEGREE = 64;
-const size_t HASH_TABLE_SIZE = 10007;
+const size_t HASH_TABLE_SIZE = 1009;
 const float MIN_RATING = 1.0f;
 const float MAX_RATING = 5.0f;
 
