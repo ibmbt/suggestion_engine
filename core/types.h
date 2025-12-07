@@ -10,6 +10,8 @@ const int BTREE_DEGREE = 64;
 const size_t HASH_TABLE_SIZE = 1009;
 const float MIN_RATING = 1.0f;
 const float MAX_RATING = 5.0f;
+const uint64_t METADATA_SIZE = 16;
+
 
 
 enum class NodeType : uint8_t {
