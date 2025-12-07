@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <ctime>
+#include <cstring>
 #include "core/types.h"
 
 struct RatingEntry {
@@ -43,9 +44,50 @@ public:
 
 
     void serialize(char* buffer) const {
+        size_t offset = 0;
+
+        memcpy(buffer + offset, &fromID, sizeof(uint32_t));
+        offset = offset + sizeof(uint32_t);
+
+        memcpy(buffer + offset, &toID, sizeof(uint32_t));
+        offset = offset + sizeof(uint32_t);
+
+        memcpy(buffer + offset, &type, sizeof(EdgeType));
+        offset = offset + sizeof(EdgeType);
+
+        memcpy(buffer + offset, &weight, sizeof(float));
+        offset = offset + sizeof(float);
+
+        memcpy(buffer + offset, &timestamp, sizeof(uint64_t));
+        offset = offset + sizeof(uint64_t);
+
+        memcpy(buffer + offset, &nextEdgeOffset, sizeof(uint64_t));
+        offset = offset + sizeof(uint64_t);
     }
 
     static Edge deserialize(const char* buffer) {
+        Edge edge;
+        size_t offset = 0;
+
+        memcpy(&edge.fromID, buffer + offset, sizeof(uint32_t));
+        offset = offset + sizeof(uint32_t);
+
+        memcpy(&edge.toID, buffer + offset, sizeof(uint32_t));
+        offset = offset + sizeof(uint32_t);
+
+        memcpy(&edge.type, buffer + offset, sizeof(EdgeType));
+        offset = offset + sizeof(EdgeType);
+
+        memcpy(&edge.weight, buffer + offset, sizeof(float));
+        offset = offset + sizeof(float);
+
+        memcpy(&edge.timestamp, buffer + offset, sizeof(uint64_t));
+        offset = offset + sizeof(uint64_t);
+
+        memcpy(&edge.nextEdgeOffset, buffer + offset, sizeof(uint64_t));
+        offset = offset + sizeof(uint64_t);
+
+        return edge;
     }
 
 };

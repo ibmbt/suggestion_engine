@@ -41,7 +41,22 @@ public:
         ratedByUsers.push_back(edge);
     }
 
-    void updateAvgRating();
+    void updateAvgRating() {
+        if (ratingCount == 0) {
+            avgRating = 0.0f;
+            return;
+        }
+
+        float total = 0.0f;
+
+        for (size_t i = 0; i < ratedByUsers.size(); ++i) {
+            Edge& edge = ratedByUsers[i];
+            total += edge.weight;
+        }
+
+        avgRating = total / ratingCount;
+    }
+
 
     void serialize(char* buffer, size_t& size) const;
     static Movie deserialize(const char* buffer, size_t& bytesRead);
