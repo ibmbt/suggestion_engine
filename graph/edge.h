@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <ctime>
 #include <cstring>
-#include "core/types.h"
+#include "../core/types.h"
 
 struct RatingEntry {
     uint32_t movieID;

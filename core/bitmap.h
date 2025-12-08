@@ -111,6 +111,7 @@ public:
         size_t byteSize = numBlocks / 8;
         if (numBlocks % 8 != 0)
             byteSize++;
+        return byteSize;
     }
 };
 
