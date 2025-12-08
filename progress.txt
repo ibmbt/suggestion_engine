@@ -11,3 +11,5 @@ use free api or dataset for population
 add hashtables in the mix for maybe caching or generate keys.
 deletion in btrees that handles all the edgecases
 performance and storage optimizations for efficiency
+finally backend on cloud
+and visual gui for frontend
