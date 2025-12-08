@@ -1,0 +1,13 @@
+done:
+implemented basic perisstant datastructures like
+insetion and searching btees, hashtables, bitmap for allocations, and a storage manager
+basic classes implemented but have some issues of memory/storage wastage.
+int main menu driven for manual testing
+
+to implement:
+combine the datastructures to make efficient database.
+use that for recommendatoin engine
+use free api or dataset for population
+add hashtables in the mix for maybe caching or generate keys.
+deletion in btrees that handles all the edgecases
+performance and storage optimizations for efficiency
