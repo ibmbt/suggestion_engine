@@ -7,19 +7,18 @@
 using namespace std;
 
 template<typename K, typename V>
-struct KeyValuePair {
+struct HashNode {
     K key;
     V value;
-    bool occupied;
+    HashNode* next;
 
-    KeyValuePair() : key(K()), value(V()), occupied(false) {}
-    KeyValuePair(K k, V v) : key(k), value(v), occupied(true) {}
+    HashNode(K k, V v) : key(k), value(v), next(nullptr) {}
 };
 
 template<typename K, typename V>
 class HashTable {
 private:
-    KeyValuePair<K, V>* table;
+    HashNode<K, V>** table;
     size_t capacity;
     size_t size;
 
@@ -35,75 +34,36 @@ private:
         return hashVal;
     }
 
-    size_t findSlot(const K& key) const {
-        size_t index = hash(key);
-        size_t originalIndex = index;
-
-        while (table[index].occupied) {
-            if (table[index].key == key) {
-                return index;
-            }
-            index = (index + 1) % capacity;
-
-            if (index == originalIndex) {
-                return capacity;
-            }
-        }
-        return index;
-    }
-
 public:
-
     HashTable(size_t cap = HASH_TABLE_SIZE)
         : capacity(cap), size(0) {
-        table = new KeyValuePair<K, V>[capacity];
+        table = new HashNode<K, V>* [capacity];
+        for (size_t i = 0; i < capacity; i++) {
+            table[i] = nullptr;
+        }
     }
 
     ~HashTable() {
+        clear();
         delete[] table;
     }
 
-
     void insert(const K& key, const V& value) {
-        size_t index = findSlot(key);
+        size_t index = hash(key);
 
-        if (index >= capacity) {
-            return;
+        HashNode<K, V>* current = table[index];
+        while (current != nullptr) {
+            if (current->key == key) {
+                current->value = value;
+                return;
+            }
+            current = current->next;
         }
 
-        if (!table[index].occupied) {
-            size++;
-        }
-
-        table[index] = KeyValuePair<K, V>(key, value);
-    }
-
-    bool find(const K& key, V& value) const {
-        size_t index = findSlot(key);
-
-        if (index < capacity && table[index].occupied) {
-            value = table[index].value;
-            return true;
-        }
-        return false;
-    }
-
-    bool contains(const K& key) const {
-        size_t index = findSlot(key);
-        return (index < capacity && table[index].occupied);
-    }
-
-    void remove(const K& key) {
-        size_t index = findSlot(key);
-
-        if (index < capacity && table[index].occupied) {
-            table[index].occupied = false;
-            size--;
-        }
-    }
-
-    size_t getSize() const {
-        return size;
+        HashNode<K, V>* newNode = new HashNode<K, V>(key, value);
+        newNode->next = table[index];
+        table[index] = newNode;
+        size++;
     }
 
     vector<K> getAllKeys() const {
@@ -111,32 +71,94 @@ public:
         keys.reserve(size);
 
         for (size_t i = 0; i < capacity; i++) {
-            if (table[i].occupied) {
-                keys.push_back(table[i].key);
+            HashNode<K, V>* current = table[i];
+            while (current != nullptr) {
+                keys.push_back(current->key);
+                current = current->next;
             }
         }
         return keys;
     }
 
-    vector<KeyValuePair<K, V>> getAllPairs() const {
-        vector<KeyValuePair<K, V>> pairs;
+    vector<pair<K, V>> getAllPairs() const {
+        vector<pair<K, V>> pairs;
         pairs.reserve(size);
 
         for (size_t i = 0; i < capacity; i++) {
-            if (table[i].occupied) {
-                pairs.push_back(table[i]);
+            HashNode<K, V>* current = table[i];
+            while (current != nullptr) {
+                pairs.push_back(make_pair(current->key, current->value));
+                current = current->next;
             }
         }
         return pairs;
     }
 
+    bool find(const K& key, V& value) const {
+        size_t index = hash(key);
+        HashNode<K, V>* current = table[index];
+
+        while (current != nullptr) {
+            if (current->key == key) {
+                value = current->value;
+                return true;
+            }
+            current = current->next;
+        }
+        return false;
+    }
+
+    bool contains(const K& key) const {
+        size_t index = hash(key);
+        HashNode<K, V>* current = table[index];
+
+        while (current != nullptr) {
+            if (current->key == key) {
+                return true;
+            }
+            current = current->next;
+        }
+        return false;
+    }
+
+    void remove(const K& key) {
+        size_t index = hash(key);
+        HashNode<K, V>* current = table[index];
+        HashNode<K, V>* prev = nullptr;
+
+        while (current != nullptr) {
+            if (current->key == key) {
+                if (prev == nullptr) {
+                    table[index] = current->next;
+                }
+                else {
+                    prev->next = current->next;
+                }
+                delete current;
+                size--;
+                return;
+            }
+            prev = current;
+            current = current->next;
+        }
+    }
+
+    size_t getSize() const {
+        return size;
+    }
+
     void clear() {
         for (size_t i = 0; i < capacity; i++) {
-            table[i].occupied = false;
+            HashNode<K, V>* current = table[i];
+            while (current != nullptr) {
+                HashNode<K, V>* temp = current;
+                current = current->next;
+                delete temp;
+            }
+            table[i] = nullptr;
         }
         size = 0;
     }
-
 };
 
 #endif

@@ -3,287 +3,339 @@
 #include <vector>
 #include <limits>
 #include <iomanip>
+#include <cmath>
 
-#include "graph/node.h"
-#include "core/storage_manager.h"
-#include "core/btree.h"
+#include "./core/types.h"
+#include "./graph/node.h"
+#include "./core/bitmap.h"
+#include "./core/storage_manager.h" 
+#include "./core/btree.h"
 
 using namespace std;
 
-StorageManager* storage = nullptr;
+Bitmap* userBitmap = nullptr;
+Bitmap* movieBitmap = nullptr;
+
+FixedStorage<User>* userStorage = nullptr;
+FixedStorage<Movie>* movieStorage = nullptr;
 
 BTree<uint32_t, uint64_t>* userIndex = nullptr;
 BTree<uint32_t, uint64_t>* movieIndex = nullptr;
 
+EdgeFileManager* edgeManager = nullptr;
+
 
 void printSeparator() {
-    cout << "------------------------------------------------\n";
+    cout << "----------------------------------------------------------------\n";
 }
 
-// Helper to clear input buffer
 void clearInput() {
     cin.clear();
     cin.ignore(numeric_limits<streamsize>::max(), '\n');
 }
 
-void displayUser(const User& u) {
-    cout << " [User ID]: " << u.userID << " | [Name]: " << u.username << "\n";
-    cout << "   Rated Movies: " << u.ratings.size() << "\n";
-    for (const auto& r : u.ratings) {
-        cout << "     -> MovieID: " << r.movieID << " (Rating: " << r.rating << ")\n";
-    }
+// Initialize all components
+void initDatabase() {
+    // Create ratings directory if it doesn't exist
+#ifdef _WIN32
+    system("mkdir ratings 2>NUL");
+#else
+    system("mkdir -p ratings 2>/dev/null");
+#endif
+
+    // 100 blocks is enough for testing manually
+    userBitmap = new Bitmap(100);
+    movieBitmap = new Bitmap(100);
+
+    // Initialize Storage
+    userStorage = new FixedStorage<User>("users.dat", User::getSize(), USERS_PER_BLOCK);
+    movieStorage = new FixedStorage<Movie>("movies.dat", Movie::getSize(), MOVIES_PER_BLOCK);
+
+    // Initialize Indices
+    userIndex = new BTree<uint32_t, uint64_t>("users.idx");
+    movieIndex = new BTree<uint32_t, uint64_t>("movies.idx");
+
+    // Initialize Edge Manager
+    edgeManager = new EdgeFileManager("ratings/");
+
+    // Check if we need to reload existing bitmaps from file?
+    // For this manual test, we assume a fresh start or simple persistence.
+    // Ideally, you'd save/load the Bitmap state to a file like "metadata.dat".
+    // For now, we will rely on the BTree to recover "used" status if we restart.
+
+    // Quick Recovery Logic: Sync Bitmap with BTree
+    vector<pair<uint32_t, uint64_t>> existingUsers = userIndex->getAllPairs();
+    for (auto& p : existingUsers) userBitmap->setBit(p.first);
+
+    vector<pair<uint32_t, uint64_t>> existingMovies = movieIndex->getAllPairs();
+    for (auto& p : existingMovies) movieBitmap->setBit(p.first);
 }
 
-void displayMovie(const Movie& m) {
-    cout << " [Movie ID]: " << m.movieID << " | [Title]: " << m.title << "\n";
-    cout << "   Avg Rating: " << fixed << setprecision(1) << m.avgRating
-        << " (" << m.ratingCount << " votes)\n";
-    cout << "   Genres: ";
-    for (const auto& g : m.genres) cout << g << " ";
-    cout << "\n";
+// Cleanup to prevent memory leaks
+void shutdownDatabase() {
+    delete userBitmap;
+    delete movieBitmap;
+    delete userStorage;
+    delete movieStorage;
+    delete userIndex;
+    delete movieIndex;
+    delete edgeManager;
 }
 
+// ============================================================================
+// MENU ACTIONS
+// ============================================================================
 
 void addUser() {
     uint32_t id;
     string name;
 
-    cout << "Enter User ID: ";
+    cout << ">> Enter User ID: ";
     cin >> id;
+    if (cin.fail()) { clearInput(); return; }
 
-    // Check if ID exists
-    uint64_t dummyOffset;
-    if (userIndex->search(id, dummyOffset)) {
-        cout << "Error: User ID already exists!\n";
+    // Check 1: Bitmap (Fast check)
+    if (!userBitmap->isFree(id)) {
+        cout << "[Error] User ID " << id << " is already taken (checked Bitmap).\n";
         return;
     }
 
-    cout << "Enter Username: ";
+    cout << ">> Enter Username: ";
     cin.ignore();
     getline(cin, name);
 
-    // Create and Store
+    // Create Node
     User newUser(id, name);
+
     try {
-        // 1. Store in Data File -> Get Offset
-        uint64_t offset = storage->storeUser(newUser);
+        // Step 1: Write to Disk
+        userStorage->writeNode(id, newUser);
 
-        // 2. Map ID to Offset in BTree
-        userIndex->insert(id, offset);
+        // Step 2: Update Index (Map ID -> 1 for existence)
+        userIndex->insert(id, 1);
 
-        cout << "User added successfully (Stored at offset: " << offset << ")\n";
+        // Step 3: Update Bitmap
+        userBitmap->setBit(id);
+
+        cout << "[Success] User added to Disk, Index, and Bitmap.\n";
     }
     catch (const exception& e) {
-        cout << "Storage Error: " << e.what() << "\n";
+        cout << "[Error] Storage failure: " << e.what() << "\n";
     }
 }
 
 void addMovie() {
     uint32_t id;
-    string title, genreLine;
-    vector<string> genres;
+    string title;
 
-    cout << "Enter Movie ID: ";
+    cout << ">> Enter Movie ID: ";
     cin >> id;
+    if (cin.fail()) { clearInput(); return; }
 
-    uint64_t dummyOffset;
-    if (movieIndex->search(id, dummyOffset)) {
-        cout << "Error: Movie ID already exists!\n";
+    if (!movieBitmap->isFree(id)) {
+        cout << "[Error] Movie ID " << id << " is already taken.\n";
         return;
     }
 
-    cout << "Enter Title: ";
+    cout << ">> Enter Movie Title: ";
     cin.ignore();
     getline(cin, title);
 
-    cout << "Enter Genres (space separated, e.g., Action SciFi): ";
-    getline(cin, genreLine);
+    // Ask for genres
+    vector<string> genres;
+    cout << ">> Enter number of genres (max " << MAX_GENRES << "): ";
+    int numGenres;
+    cin >> numGenres;
+    if (cin.fail()) { clearInput(); numGenres = 0; }
 
-    // Simple split for genres
-    size_t pos = 0;
-    string token;
-    while ((pos = genreLine.find(" ")) != string::npos) {
-        token = genreLine.substr(0, pos);
-        if (!token.empty()) genres.push_back(token);
-        genreLine.erase(0, pos + 1);
+    cin.ignore();
+    for (int i = 0; i < numGenres && i < MAX_GENRES; i++) {
+        string genre;
+        cout << "   Genre " << (i + 1) << ": ";
+        getline(cin, genre);
+        if (!genre.empty()) {
+            genres.push_back(genre);
+        }
     }
-    if (!genreLine.empty()) genres.push_back(genreLine);
 
-    // Create and Store
+    if (genres.empty()) {
+        genres.push_back("General");
+    }
+
     Movie newMovie(id, title, genres);
+
     try {
-        uint64_t offset = storage->storeMovie(newMovie);
-        movieIndex->insert(id, offset);
-        cout << "Movie added successfully (Stored at offset: " << offset << ")\n";
+        movieStorage->writeNode(id, newMovie);
+        movieIndex->insert(id, 1);
+        movieBitmap->setBit(id);
+        cout << "[Success] Movie added.\n";
     }
     catch (const exception& e) {
-        cout << "Storage Error: " << e.what() << "\n";
+        cout << "[Error] " << e.what() << "\n";
     }
 }
 
-void findUser() {
-    uint32_t id;
-    cout << "Enter User ID to find: ";
-    cin >> id;
+void listUsers() {
+    cout << "\n--- User List (Retrieved from BTree -> Disk) ---\n";
 
-    uint64_t offset;
-    if (userIndex->search(id, offset)) {
-        try {
-            User u = storage->loadUser(offset);
-            printSeparator();
-            displayUser(u);
-        }
-        catch (const exception& e) {
-            cout << "Error loading user data: " << e.what() << "\n";
-        }
-    }
-    else {
-        cout << "User not found.\n";
-    }
-}
+    // 1. Get all IDs from BTree
+    vector<pair<uint32_t, uint64_t>> all = userIndex->getAllPairs();
 
-void findMovie() {
-    uint32_t id;
-    cout << "Enter Movie ID to find: ";
-    cin >> id;
-
-    uint64_t offset;
-    if (movieIndex->search(id, offset)) {
-        try {
-            Movie m = storage->loadMovie(offset);
-            printSeparator();
-            displayMovie(m);
-        }
-        catch (const exception& e) {
-            cout << "Error loading movie data: " << e.what() << "\n";
-        }
-    }
-    else {
-        cout << "Movie not found.\n";
-    }
-}
-
-void rateMovie() {
-    uint32_t uid, mid;
-    float rating;
-
-    cout << "Enter User ID: "; cin >> uid;
-    cout << "Enter Movie ID: "; cin >> mid;
-    cout << "Enter Rating (1.0 - 5.0): "; cin >> rating;
-
-    uint64_t uOff, mOff;
-    bool userExists = userIndex->search(uid, uOff);
-    bool movieExists = movieIndex->search(mid, mOff);
-
-    if (!userExists || !movieExists) {
-        cout << "Error: User or Movie not found.\n";
+    if (all.empty()) {
+        cout << "Database is empty.\n";
         return;
     }
 
-    try {
-        // 1. Load both objects from disk
-        User u = storage->loadUser(uOff);
-        Movie m = storage->loadMovie(mOff);
+    // 2. Iterate and Load from Disk
+    cout << left << setw(10) << "ID" << setw(30) << "Username" << setw(15) << "Ratings Made" << endl;
+    printSeparator();
 
-        // 2. Update In-Memory Objects
-        u.rateMovie(mid, rating); // Adds to User's list and creates Edge
-        m.addRating(uid, rating); // Adds to Movie's list and creates Edge
-        m.updateAvgRating();
-
-        storage->updateUser(uOff, u);
-        storage->updateMovie(mOff, m);
-
-        cout << "Rating applied and saved to disk.\n";
-
-    }
-    catch (const exception& e) {
-        cout << "Error during rating transaction: " << e.what() << "\n";
-    }
-}
-
-void listAllUsers() {
-    cout << "--- Listing All Users from BTree ---\n";
-    vector<pair<uint32_t, uint64_t>> all = userIndex->getAllPairs();
-
-    if (all.empty()) cout << "No users found.\n";
-
-    for (auto& pair : all) {
-        // pair.first is ID, pair.second is Offset
+    for (auto& p : all) {
+        uint32_t uid = p.first;
         try {
-            User u = storage->loadUser(pair.second);
-            displayUser(u);
+            User u = userStorage->readNode(uid);
+            cout << left << setw(10) << u.userID
+                << setw(30) << u.getUsername()
+                << setw(15) << u.totalRatings << endl;
         }
-        catch (exception& e) {
-            cout << "Error loading ID " << pair.first << "\n";
+        catch (...) {
+            cout << "Error reading ID " << uid << endl;
         }
     }
 }
 
-void listAllMovies() {
-    cout << "--- Listing All Movies from BTree ---\n";
+void listMovies() {
+    cout << "\n--- Movie List (Retrieved from BTree -> Disk) ---\n";
+
     vector<pair<uint32_t, uint64_t>> all = movieIndex->getAllPairs();
 
-    if (all.empty()) cout << "No movies found.\n";
+    if (all.empty()) {
+        cout << "Database is empty.\n";
+        return;
+    }
 
-    for (auto& pair : all) {
+    cout << left << setw(10) << "ID" << setw(30) << "Title" << setw(12) << "Avg Rating"
+        << setw(8) << "Count" << "Genres" << endl;
+    printSeparator();
+
+    for (auto& p : all) {
+        uint32_t mid = p.first;
         try {
-            Movie m = storage->loadMovie(pair.second);
-            displayMovie(m);
+            Movie m = movieStorage->readNode(mid);
+
+            // Get genres as a comma-separated string
+            vector<string> genres = m.getGenres();
+            string genreStr = "";
+            for (size_t i = 0; i < genres.size(); i++) {
+                genreStr += genres[i];
+                if (i < genres.size() - 1) genreStr += ", ";
+            }
+
+            cout << left << setw(10) << m.movieID
+                << setw(30) << m.getTitle()
+                << setw(12) << fixed << setprecision(1) << m.getAvgRating()
+                << setw(8) << m.ratingCount
+                << genreStr << endl;
         }
-        catch (exception& e) {
-            cout << "Error loading ID " << pair.first << "\n";
+        catch (...) {
+            cout << "Error reading ID " << mid << endl;
         }
     }
 }
 
+void addRating() {
+    uint32_t uid, mid;
+    float rating;
 
-int main() {
+    cout << ">> Enter User ID: "; cin >> uid;
+    cout << ">> Enter Movie ID: "; cin >> mid;
+    cout << ">> Enter Rating (1.0-5.0): "; cin >> rating;
+
+    // Check existence via Bitmaps (O(1) check)
+    if (userBitmap->isFree(uid)) { cout << "[Error] User not found.\n"; return; }
+    if (movieBitmap->isFree(mid)) { cout << "[Error] Movie not found.\n"; return; }
+
     try {
-        storage = new StorageManager("data_storage.dat");
-        userIndex = new BTree<uint32_t, uint64_t>("users.idx");
-        movieIndex = new BTree<uint32_t, uint64_t>("movies.idx");
+        // 1. Update Edge File (The raw rating data)
+        edgeManager->addOrUpdateRating(uid, mid, rating);
+
+        // 2. Update User Node (Stats)
+        User u = userStorage->readNode(uid);
+        u.totalRatings++;
+        userStorage->writeNode(uid, u);
+
+        // 3. Update Movie Node (Stats)
+        Movie m = movieStorage->readNode(mid);
+        m.addRating(rating); // Updates sum and count
+        movieStorage->writeNode(mid, m);
+
+        cout << "[Success] Rating saved. User and Movie stats updated.\n";
+
     }
     catch (const exception& e) {
-        cerr << "Fatal Initialization Error: " << e.what() << endl;
-        return 1;
+        cout << "[Error] Rating transaction failed: " << e.what() << "\n";
     }
+}
+
+void viewUserRatings() {
+    uint32_t uid;
+    cout << ">> Enter User ID: "; cin >> uid;
+
+    if (userBitmap->isFree(uid)) { cout << "[Error] User not found.\n"; return; }
+
+    vector<RatingEdge> ratings = edgeManager->readRatings(uid);
+
+    if (ratings.empty()) {
+        cout << "No ratings found for this user.\n";
+        return;
+    }
+
+    cout << "\nRatings for User " << uid << ":\n";
+    for (auto& r : ratings) {
+        // Optional: Load movie title for better display
+        string title = "Unknown";
+        if (!movieBitmap->isFree(r.movieID)) {
+            Movie m = movieStorage->readNode(r.movieID);
+            title = m.getTitle();
+        }
+        cout << " - Movie: " << title << " (ID: " << r.movieID << ") -> " << r.getRating() << "/5.0\n";
+    }
+}
+
+// ============================================================================
+// MAIN LOOP
+// ============================================================================
+int main() {
+    initDatabase();
 
     int choice = 0;
     while (true) {
-        printSeparator();
+        cout << "\n=== MANUAL DATABASE TESTER ===\n";
         cout << "1. Add User\n";
         cout << "2. Add Movie\n";
-        cout << "3. Find User (by ID)\n";
-        cout << "4. Find Movie (by ID)\n";
-        cout << "5. Rate a Movie (Connect User & Movie)\n";
-        cout << "6. List All Users\n";
-        cout << "7. List All Movies\n";
+        cout << "3. List All Users\n";
+        cout << "4. List All Movies\n";
+        cout << "5. Add Rating (Connect User -> Movie)\n";
+        cout << "6. View User Ratings\n";
         cout << "0. Exit\n";
         printSeparator();
-        cout << "Enter choice: ";
+        cout << "Choice: ";
         cin >> choice;
 
-        if (cin.fail()) {
-            clearInput();
-            continue;
-        }
+        if (cin.fail()) { clearInput(); continue; }
 
         switch (choice) {
         case 1: addUser(); break;
         case 2: addMovie(); break;
-        case 3: findUser(); break;
-        case 4: findMovie(); break;
-        case 5: rateMovie(); break;
-        case 6: listAllUsers(); break;
-        case 7: listAllMovies(); break;
+        case 3: listUsers(); break;
+        case 4: listMovies(); break;
+        case 5: addRating(); break;
+        case 6: viewUserRatings(); break;
         case 0:
-            cout << "Saving and Exiting...\n";
-            delete storage;
-            delete userIndex;
-            delete movieIndex;
+            cout << "Exiting...\n";
+            shutdownDatabase();
             return 0;
-        default:
-            cout << "Invalid choice.\n";
+        default: cout << "Invalid choice.\n";
         }
     }
 }

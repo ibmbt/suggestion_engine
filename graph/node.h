@@ -10,18 +10,18 @@
 
 using namespace std;
 
-struct UserNode {
+struct User {
     uint32_t userID;
     char username[MAX_USERNAME_LENGTH];
     uint32_t totalRatings;
     uint32_t avgRating;
     uint64_t edgeFileOffset;      // if one field for all users
 
-    UserNode() : userID(0), totalRatings(0), avgRating(0), edgeFileOffset(0) {
+    User() : userID(0), totalRatings(0), avgRating(0), edgeFileOffset(0) {
         memset(username, 0, MAX_USERNAME_LENGTH);
     }
 
-    UserNode(uint32_t id, const string& name)
+    User(uint32_t id, const string& name)
         : userID(id), totalRatings(0), avgRating(0), edgeFileOffset(0) {
         memset(username, 0, MAX_USERNAME_LENGTH);
         size_t len = name.length();
@@ -61,8 +61,8 @@ struct UserNode {
         memcpy(buffer + offset, &edgeFileOffset, sizeof(uint64_t));
     }
 
-    static UserNode deserialize(const char* buffer) {
-        UserNode node;
+    static User deserialize(const char* buffer) {
+        User node;
         size_t offset = 0;
         memcpy(&node.userID, buffer + offset, sizeof(uint32_t));
         offset += sizeof(uint32_t);
@@ -81,7 +81,7 @@ struct UserNode {
     }
 };
 
-struct MovieNode {
+struct Movie {
     uint32_t movieID;
     char title[MAX_TITLE_LENGTH];
     char genres[MAX_GENRES][MAX_GENRE_LENGTH];
@@ -90,12 +90,12 @@ struct MovieNode {
     uint32_t sumRating;
     uint64_t reserved;
 
-    MovieNode() : movieID(0), genreCount(0), ratingCount(0), sumRating(0), reserved(0) {
+    Movie() : movieID(0), genreCount(0), ratingCount(0), sumRating(0), reserved(0) {
         memset(title, 0, MAX_TITLE_LENGTH);
         memset(genres, 0, MAX_GENRES * MAX_GENRE_LENGTH);
     }
 
-    MovieNode(uint32_t id, const string& t, const vector<string>& g)
+    Movie(uint32_t id, const string& t, const vector<string>& g)
         : movieID(id), genreCount(0), ratingCount(0), sumRating(0), reserved(0) {
         memset(title, 0, MAX_TITLE_LENGTH);
         memset(genres, 0, MAX_GENRES * MAX_GENRE_LENGTH);
@@ -165,8 +165,8 @@ struct MovieNode {
         memcpy(buffer + offset, &reserved, sizeof(uint64_t));
     }
 
-    static MovieNode deserialize(const char* buffer) {
-        MovieNode node;
+    static Movie deserialize(const char* buffer) {
+        Movie node;
         size_t offset = 0;
         memcpy(&node.movieID, buffer + offset, sizeof(uint32_t));
         offset += sizeof(uint32_t);

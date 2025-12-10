@@ -4,324 +4,226 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <cstring>
+#include <iostream>
 #include <stdexcept>
-#include "bitmap.h"
-#include "types.h"
+#include <type_traits>
 #include "../graph/node.h"
-#include "../graph/edge.h"
+#include "./types.h"
 
 using namespace std;
 
-class StorageManager {
+template<typename NodeType>
+class FixedStorage {
 private:
     fstream file;
-    Bitmap* bitmap;
-    size_t totalBlocks;
-    string dataFile;
-
-    void initializeStorage() {
-        char* block = new char[BLOCK_SIZE];
-        memset(block, 0, BLOCK_SIZE);
-
-        file.clear();
-        file.seekp(0, ios::beg);
-        file.write(block, BLOCK_SIZE);
-        file.flush();
-
-        delete[] block;
-
-        bitmap->setBit(0);
-        saveBitmap();
-    }
-
-    void loadBitmap() {
-        char* block = new char[BLOCK_SIZE];
-
-        file.clear();
-        file.seekg(0, ios::beg);
-        file.read(block, BLOCK_SIZE);
-
-        if (!file.fail()) {
-            bitmap->deserialize(block);
-        }
-
-        delete[] block;
-    }
-
-    void saveBitmap() {
-        char* block = new char[BLOCK_SIZE];
-        memset(block, 0, BLOCK_SIZE);
-        bitmap->serialize(block);
-
-        file.clear();
-        file.seekp(0, ios::beg);
-        file.write(block, BLOCK_SIZE);
-        file.flush();
-
-        delete[] block;
-    }
+    string filename;
+    int nodeSize;
+    int nodesPerBlock;
 
 public:
-    StorageManager(const  string& filename, size_t blocks = 10000)
-        : dataFile(filename), totalBlocks(blocks) {
+    FixedStorage(const string& fname, int nSize, int nPerBlock)
+        : filename(fname), nodeSize(nSize), nodesPerBlock(nPerBlock) {
 
-        bitmap = new Bitmap(totalBlocks);
-
-        file.open(dataFile, ios::in | ios::out | ios::binary);
-
+        file.open(filename, ios::in | ios::out | ios::binary);
         if (!file.is_open()) {
-            file.open(dataFile, ios::out | ios::binary);
+            file.open(filename, ios::out | ios::binary);
             file.close();
-            file.open(dataFile, ios::in | ios::out | ios::binary);
-            initializeStorage();
-        }
-        else {
-            loadBitmap();
+            file.open(filename, ios::in | ios::out | ios::binary);
         }
     }
 
-    ~StorageManager() {
+    ~FixedStorage() {
         if (file.is_open()) {
-            saveBitmap();
             file.close();
         }
-        delete bitmap;
     }
 
+    void writeNode(uint32_t nodeID, const NodeType& node) {
+        uint32_t blockNum = nodeID / nodesPerBlock;
+        uint32_t posInBlock = nodeID % nodesPerBlock;
+        uint64_t offset = blockNum * BLOCK_SIZE + posInBlock * nodeSize;
 
-    uint64_t allocateBlock() {
-        size_t blockNum = bitmap->findFreeBlock();
-        if (blockNum >= totalBlocks) {
-            throw  runtime_error("No free blocks available");
-        }
-        bitmap->setBit(blockNum);
-        saveBitmap();
-        return blockNum * BLOCK_SIZE;
-    }
+        char buffer[MOVIE_NODE_SIZE];
+        memset(buffer, 0, nodeSize);
+        node.serialize(buffer);
 
-    void freeBlock(uint64_t offset) {
-        size_t blockNum = offset / BLOCK_SIZE;
-        if (blockNum > 0 && blockNum < totalBlocks) {
-            bitmap->clearBit(blockNum);
-            saveBitmap();
-        }
-    }
-
-    void writeBlock(uint64_t offset, const char* data, size_t size) {
-        if (size > BLOCK_SIZE) {
-            throw  runtime_error("Data exceeds block size");
-        }
-
-        file.clear();
         file.seekp(offset, ios::beg);
-        file.write(data, size);
+        file.write(buffer, nodeSize);
         file.flush();
 
         if (file.fail()) {
-            throw  runtime_error("Disk write failed at offset " + to_string(offset));
+            throw runtime_error("Failed to write node");
         }
     }
 
-    void readBlock(uint64_t offset, char* buffer, size_t size) {
-        file.clear();
+    NodeType readNode(uint32_t nodeID) {
+        uint32_t blockNum = nodeID / nodesPerBlock;
+        uint32_t posInBlock = nodeID % nodesPerBlock;
+        uint64_t offset = blockNum * BLOCK_SIZE + posInBlock * nodeSize;
+
+        char buffer[MOVIE_NODE_SIZE];
+        memset(buffer, 0, nodeSize);
+
         file.seekg(offset, ios::beg);
-        file.read(buffer, size);
+        file.read(buffer, nodeSize);
 
-        if (file.gcount() != static_cast<streamsize>(size)) {
-            throw runtime_error("Disk read failed at offset " + to_string(offset) +
-                ". Expected " + to_string(size) +
-                ", got " + to_string(file.gcount()));
+        if (file.fail()) {
+            throw runtime_error("Failed to read node");
+        }
+
+        return NodeType::deserialize(buffer);
+    }
+
+    bool exists(uint32_t nodeID) {
+        try {
+            NodeType node = readNode(nodeID);
+            return node.id == nodeID;
+        }
+        catch (...) {
+            return false;
         }
     }
 
-    uint64_t storeEdges(const  vector<Edge>& edges) {
-        if (edges.empty()) return 0;
+    void printStats() {
+        file.seekg(0, ios::end);
+        uint64_t fileSize = file.tellg();
+        uint64_t numBlocks = (fileSize + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-        uint64_t firstOffset = 0;
-        uint64_t prevOffset = 0;
-
-        for (size_t i = 0; i < edges.size(); i++) {
-            Edge edge = edges[i];
-            uint64_t currentOffset = allocateBlock();
-
-            if (i == 0) {
-                firstOffset = currentOffset;
-            }
-            else {
-                updateNextEdgeOffset(prevOffset, currentOffset);
-            }
-
-            char buffer[BLOCK_SIZE];
-            memset(buffer, 0, BLOCK_SIZE);
-            edge.serialize(buffer);
-            writeBlock(currentOffset, buffer, BLOCK_SIZE);
-
-            prevOffset = currentOffset;
-        }
-
-        return firstOffset;
+        cout << "File: " << filename << endl;
+        cout << "  File size: " << (fileSize / 1024.0) << " KB" << endl;
+        cout << "  Blocks used: " << numBlocks << endl;
+        cout << "  Node size: " << nodeSize << " bytes" << endl;
+        cout << "  Nodes per block: " << nodesPerBlock << endl;
+        cout << "  Max nodes: " << (numBlocks * nodesPerBlock) << endl;
     }
-
-    vector<Edge> loadEdges(uint64_t offset) {
-        vector<Edge> edges;
-
-        int loopSafety = 0;
-
-        while (offset != 0 && loopSafety < 10000) {
-            char buffer[BLOCK_SIZE];
-            memset(buffer, 0, BLOCK_SIZE);
-            readBlock(offset, buffer, BLOCK_SIZE);
-
-            Edge edge = Edge::deserialize(buffer);
-            edges.push_back(edge);
-
-            offset = edge.nextEdgeOffset;
-            loopSafety++;
-        }
-
-        return edges;
-    }
-
-    void freeEdgeChain(uint64_t offset) {
-        int loopSafety = 0;
-        while (offset != 0 && loopSafety < 10000) {
-            char buffer[BLOCK_SIZE];
-            memset(buffer, 0, BLOCK_SIZE);
-            readBlock(offset, buffer, BLOCK_SIZE);
-
-            Edge edge = Edge::deserialize(buffer);
-            uint64_t nextOffset = edge.nextEdgeOffset;
-
-            freeBlock(offset);
-            offset = nextOffset;
-            loopSafety++;
-        }
-    }
-
-    uint64_t storeUser(User& user) {
-        if (!user.ratedMovies.empty()) {
-            user.ratedMoviesOffset = storeEdges(user.ratedMovies);
-        }
-
-        char buffer[BLOCK_SIZE];
-        memset(buffer, 0, BLOCK_SIZE);
-        size_t size;
-        user.serialize(buffer, size);
-
-        uint64_t offset = allocateBlock();
-        writeBlock(offset, buffer, BLOCK_SIZE);
-        return offset;
-    }
-
-    User loadUser(uint64_t offset) {
-        char buffer[BLOCK_SIZE];
-        memset(buffer, 0, BLOCK_SIZE);
-
-        readBlock(offset, buffer, BLOCK_SIZE);
-
-        size_t bytesRead;
-        User user = User::deserialize(buffer, bytesRead);
-
-        if (user.ratedMoviesOffset != 0) {
-            user.ratedMovies = loadEdges(user.ratedMoviesOffset);
-        }
-
-        return user;
-    }
-
-    void updateUser(uint64_t offset, User& user) {
-        User oldUser = loadUser(offset);
-        if (oldUser.ratedMoviesOffset != 0) {
-            freeEdgeChain(oldUser.ratedMoviesOffset);
-        }
-
-        if (!user.ratedMovies.empty()) {
-            user.ratedMoviesOffset = storeEdges(user.ratedMovies);
-        }
-
-        char buffer[BLOCK_SIZE];
-        memset(buffer, 0, BLOCK_SIZE);
-        size_t size;
-        user.serialize(buffer, size);
-
-        writeBlock(offset, buffer, BLOCK_SIZE);
-    }
+};
 
 
-    uint64_t storeMovie(Movie& movie) {
-        if (!movie.ratedByUsers.empty()) {
-            movie.ratedByUsersOffset = storeEdges(movie.ratedByUsers);
-        }
-        if (!movie.similarMovies.empty()) {
-            movie.similarMoviesOffset = storeEdges(movie.similarMovies);
-        }
-
-        char buffer[BLOCK_SIZE];
-        memset(buffer, 0, BLOCK_SIZE);
-        size_t size;
-        movie.serialize(buffer, size);
-
-        uint64_t offset = allocateBlock();
-        writeBlock(offset, buffer, BLOCK_SIZE);
-        return offset;
-    }
-
-    Movie loadMovie(uint64_t offset) {
-        char buffer[BLOCK_SIZE];
-        memset(buffer, 0, BLOCK_SIZE);
-
-        readBlock(offset, buffer, BLOCK_SIZE);
-
-        size_t bytesRead;
-        Movie movie = Movie::deserialize(buffer, bytesRead);
-
-        if (movie.ratedByUsersOffset != 0) {
-            movie.ratedByUsers = loadEdges(movie.ratedByUsersOffset);
-        }
-        if (movie.similarMoviesOffset != 0) {
-            movie.similarMovies = loadEdges(movie.similarMoviesOffset);
-        }
-
-        return movie;
-    }
-
-    void updateMovie(uint64_t offset, Movie& movie) {
-        Movie oldMovie = loadMovie(offset);
-        if (oldMovie.ratedByUsersOffset != 0) {
-            freeEdgeChain(oldMovie.ratedByUsersOffset);
-        }
-        if (oldMovie.similarMoviesOffset != 0) {
-            freeEdgeChain(oldMovie.similarMoviesOffset);
-        }
-
-        if (!movie.ratedByUsers.empty()) {
-            movie.ratedByUsersOffset = storeEdges(movie.ratedByUsers);
-        }
-        if (!movie.similarMovies.empty()) {
-            movie.similarMoviesOffset = storeEdges(movie.similarMovies);
-        }
-
-        char buffer[BLOCK_SIZE];
-        memset(buffer, 0, BLOCK_SIZE);
-        size_t size;
-        movie.serialize(buffer, size);
-
-        writeBlock(offset, buffer, BLOCK_SIZE);
-    }
-
+class EdgeFileManager {
 private:
-    void updateNextEdgeOffset(uint64_t edgeOffset, uint64_t nextOffset) {
-        char buffer[BLOCK_SIZE];
-        memset(buffer, 0, BLOCK_SIZE);
+    string baseDir;
 
-        readBlock(edgeOffset, buffer, BLOCK_SIZE);
+    string getEdgeFilename(uint32_t userID) const {
+        return baseDir + "user_" + to_string(userID) + ".edges";
+    }
 
-        Edge edge = Edge::deserialize(buffer);
-        edge.nextEdgeOffset = nextOffset;
+public:
+    EdgeFileManager(const string& dir = "./") : baseDir(dir) {}
 
-        edge.serialize(buffer);
-        writeBlock(edgeOffset, buffer, BLOCK_SIZE);
+    void writeRatings(uint32_t userID, const vector<RatingEdge>& ratings) {
+        string filename = getEdgeFilename(userID);
+
+        // Create directory if it doesn't exist
+#ifdef _WIN32
+        system(("mkdir " + baseDir + " 2>NUL").c_str());
+#else
+        system(("mkdir -p " + baseDir + " 2>/dev/null").c_str());
+#endif
+
+        fstream file(filename, ios::out | ios::binary | ios::trunc);
+
+        if (!file.is_open()) {
+            throw runtime_error("Failed to create edge file: " + filename);
+        }
+
+        uint32_t count = static_cast<uint32_t>(ratings.size());
+        file.write(reinterpret_cast<const char*>(&count), sizeof(uint32_t));
+
+        char buffer[RatingEdge::getSize()];
+
+        for (size_t i = 0; i < ratings.size(); i++) {
+            const RatingEdge& rating = ratings[i];
+            rating.serialize(buffer);
+            file.write(buffer, RatingEdge::getSize());
+        }
+
+        file.close();
+    }
+
+    vector<RatingEdge> readRatings(uint32_t userID) {
+        string filename = getEdgeFilename(userID);
+        fstream file(filename, ios::in | ios::binary);
+
+        vector<RatingEdge> ratings;
+
+        if (!file.is_open()) {
+            return ratings;
+        }
+
+        uint32_t count;
+        file.read(reinterpret_cast<char*>(&count), sizeof(uint32_t));
+
+        if (file.fail()) {
+            file.close();
+            return ratings;
+        }
+
+        ratings.reserve(count);
+        char buffer[RatingEdge::getSize()];
+
+        for (uint32_t i = 0; i < count; i++) {
+            file.read(buffer, RatingEdge::getSize());
+            if (file.fail()) break;
+
+            RatingEdge edge = RatingEdge::deserialize(buffer);
+            ratings.push_back(edge);
+        }
+
+        file.close();
+        return ratings;
+    }
+
+    void addOrUpdateRating(uint32_t userID, uint32_t movieID, float ratingValue) {
+        vector<RatingEdge> ratings = readRatings(userID);
+
+        bool found = false;
+
+        for (size_t i = 0; i < ratings.size(); i++) {
+            RatingEdge& edge = ratings[i];
+            if (edge.movieID == movieID) {
+                edge.setRating(ratingValue);
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            ratings.push_back(RatingEdge(movieID, ratingValue));
+        }
+
+        writeRatings(userID, ratings);
+    }
+
+    bool getRating(uint32_t userID, uint32_t movieID, float& ratingValue) {
+        vector<RatingEdge> ratings = readRatings(userID);
+
+        for (size_t i = 0; i < ratings.size(); i++) {
+            const RatingEdge& edge = ratings[i];
+            if (edge.movieID == movieID) {
+                ratingValue = edge.getRating();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool hasRating(uint32_t userID, uint32_t movieID) {
+        vector<RatingEdge> ratings = readRatings(userID);
+
+        for (size_t i = 0; i < ratings.size(); i++) {
+            const RatingEdge& edge = ratings[i];
+            if (edge.movieID == movieID) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void deleteUserEdges(uint32_t userID) {
+        string filename = getEdgeFilename(userID);
+        remove(filename.c_str());
     }
 };
 
