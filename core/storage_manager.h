@@ -9,7 +9,8 @@
 #include <type_traits>
 #include "../graph/node.h"
 #include "./types.h"
-
+#include <filesystem>
+namespace fs = std::filesystem;
 using namespace std;
 
 template<typename NodeType>
@@ -101,24 +102,22 @@ public:
 
 class EdgeFileManager {
 private:
-    string baseDir;
+    fs::path baseDir;
 
     string getEdgeFilename(uint32_t userID) const {
-        return baseDir + "user_" + to_string(userID) + ".edges";
+        fs::path fullPath = baseDir / ("user_" + to_string(userID) + ".edges");
+        return fullPath.string();
     }
 
 public:
-    EdgeFileManager(const string& dir = "./") : baseDir(dir) {}
+    EdgeFileManager(const string& dir = "ratings") : baseDir(dir) {
+        if (!fs::exists(baseDir)) {
+            fs::create_directories(baseDir);
+        }
+    }
 
     void writeRatings(uint32_t userID, const vector<RatingEdge>& ratings) {
         string filename = getEdgeFilename(userID);
-
-        // Create directory if it doesn't exist
-#ifdef _WIN32
-        system(("mkdir " + baseDir + " 2>NUL").c_str());
-#else
-        system(("mkdir -p " + baseDir + " 2>/dev/null").c_str());
-#endif
 
         fstream file(filename, ios::out | ios::binary | ios::trunc);
 
@@ -130,13 +129,10 @@ public:
         file.write(reinterpret_cast<const char*>(&count), sizeof(uint32_t));
 
         char buffer[RatingEdge::getSize()];
-
         for (size_t i = 0; i < ratings.size(); i++) {
-            const RatingEdge& rating = ratings[i];
-            rating.serialize(buffer);
+            ratings[i].serialize(buffer);
             file.write(buffer, RatingEdge::getSize());
         }
-
         file.close();
     }
 

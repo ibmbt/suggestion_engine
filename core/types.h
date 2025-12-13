@@ -22,6 +22,6 @@ const size_t MOVIE_NODE_SIZE = 4 + MAX_TITLE_LENGTH + (MAX_GENRES * MAX_GENRE_LE
 const size_t USERS_PER_BLOCK = BLOCK_SIZE / USER_NODE_SIZE;
 const size_t MOVIES_PER_BLOCK = BLOCK_SIZE / MOVIE_NODE_SIZE;
 
-
+static const uint32_t MAX_SLOTS = 1000000;
 
 #endif
