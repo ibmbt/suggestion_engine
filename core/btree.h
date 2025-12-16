@@ -327,6 +327,272 @@ private:
         }
     }
 
+    void getPredecessor(uint64_t nodeOffset, uint32_t idx, K& predKey, V& predValue) {
+        BTreeNode<K, V> node = readNode(nodeOffset);
+        uint64_t current = node.children[idx];
+
+        while (true) {
+            BTreeNode<K, V> crnt = readNode(current);
+            if (crnt.isLeaf) {
+                predKey = crnt.keys[crnt.numKeys - 1];
+                predValue = crnt.values[crnt.numKeys - 1];
+                return;
+            }
+            current = crnt.children[crnt.numKeys];
+        }
+    }
+
+    void getSuccessor(uint64_t nodeOffset, uint32_t idx, K& succKey, V& succValue) {
+        BTreeNode<K, V> node = readNode(nodeOffset);
+        uint64_t current = node.children[idx + 1];
+
+        while (true) {
+            BTreeNode<K, V> crnt = readNode(current);
+            if (crnt.isLeaf) {
+                succKey = crnt.keys[0];
+                succValue = crnt.values[0];
+                return;
+            }
+            current = crnt.children[0];
+        }
+    }
+
+    void merge(BTreeNode<K, V>& parent, uint32_t idx) {
+        uint64_t leftChildOffset = parent.children[idx];
+        uint64_t rightChildOffset = parent.children[idx + 1];
+
+        BTreeNode<K, V> leftChild = readNode(leftChildOffset);
+        BTreeNode<K, V> rightChild = readNode(rightChildOffset);
+
+        leftChild.keys[leftChild.numKeys] = parent.keys[idx];
+        leftChild.values[leftChild.numKeys] = parent.values[idx];
+        leftChild.numKeys++;
+
+        for (uint32_t i = 0; i < rightChild.numKeys; i++) {
+            leftChild.keys[leftChild.numKeys + i] = rightChild.keys[i];
+            leftChild.values[leftChild.numKeys + i] = rightChild.values[i];
+        }
+
+        if (!leftChild.isLeaf) {
+            for (uint32_t i = 0; i <= rightChild.numKeys; i++) {
+                leftChild.children[leftChild.numKeys + i] = rightChild.children[i];
+            }
+        }
+
+        leftChild.numKeys += rightChild.numKeys;
+
+        for (uint32_t i = idx; i < parent.numKeys - 1; i++) {
+            parent.keys[i] = parent.keys[i + 1];
+            parent.values[i] = parent.values[i + 1];
+        }
+
+        for (uint32_t i = idx + 1; i < parent.numKeys; i++) {
+            parent.children[i] = parent.children[i + 1];
+        }
+
+        parent.numKeys--;
+
+        writeNode(leftChild, leftChildOffset);
+        writeNode(parent, parent.nodeOffset);
+    }
+
+    void borrowFromLeft(BTreeNode<K, V>& parent, uint32_t idx) {
+        uint64_t childOffset = parent.children[idx];
+        uint64_t leftSiblingOffset = parent.children[idx - 1];
+
+        BTreeNode<K, V> child = readNode(childOffset);
+        BTreeNode<K, V> leftSibling = readNode(leftSiblingOffset);
+
+        for (int32_t i = child.numKeys - 1; i >= 0; i--) {
+            child.keys[i + 1] = child.keys[i];
+            child.values[i + 1] = child.values[i];
+        }
+
+        if (!child.isLeaf) {
+            for (int32_t i = child.numKeys; i >= 0; i--) {
+                child.children[i + 1] = child.children[i];
+            }
+        }
+
+        child.keys[0] = parent.keys[idx - 1];
+        child.values[0] = parent.values[idx - 1];
+
+        parent.keys[idx - 1] = leftSibling.keys[leftSibling.numKeys - 1];
+        parent.values[idx - 1] = leftSibling.values[leftSibling.numKeys - 1];
+
+        if (!child.isLeaf) {
+            child.children[0] = leftSibling.children[leftSibling.numKeys];
+        }
+
+        child.numKeys++;
+        leftSibling.numKeys--;
+
+        writeNode(child, childOffset);
+        writeNode(leftSibling, leftSiblingOffset);
+        writeNode(parent, parent.nodeOffset);
+    }
+
+    void borrowFromRight(BTreeNode<K, V>& parent, uint32_t idx) {
+        uint64_t childOffset = parent.children[idx];
+        uint64_t rightSiblingOffset = parent.children[idx + 1];
+
+        BTreeNode<K, V> child = readNode(childOffset);
+        BTreeNode<K, V> rightSibling = readNode(rightSiblingOffset);
+
+        child.keys[child.numKeys] = parent.keys[idx];
+        child.values[child.numKeys] = parent.values[idx];
+
+        parent.keys[idx] = rightSibling.keys[0];
+        parent.values[idx] = rightSibling.values[0];
+
+        if (!child.isLeaf) {
+            child.children[child.numKeys + 1] = rightSibling.children[0];
+        }
+
+        child.numKeys++;
+
+        for (uint32_t i = 0; i < rightSibling.numKeys - 1; i++) {
+            rightSibling.keys[i] = rightSibling.keys[i + 1];
+            rightSibling.values[i] = rightSibling.values[i + 1];
+        }
+
+        if (!rightSibling.isLeaf) {
+            for (uint32_t i = 0; i < rightSibling.numKeys; i++) {
+                rightSibling.children[i] = rightSibling.children[i + 1];
+            }
+        }
+
+        rightSibling.numKeys--;
+
+        writeNode(child, childOffset);
+        writeNode(rightSibling, rightSiblingOffset);
+        writeNode(parent, parent.nodeOffset);
+    }
+
+    void fill(BTreeNode<K, V>& parent, uint32_t idx) {
+        if (idx != 0) {
+            BTreeNode<K, V> leftSibling = readNode(parent.children[idx - 1]);
+            if (leftSibling.numKeys >= BTREE_DEGREE) {
+                borrowFromLeft(parent, idx);
+                return;
+            }
+        }
+
+        if (idx != parent.numKeys) {
+            BTreeNode<K, V> rightSibling = readNode(parent.children[idx + 1]);
+            if (rightSibling.numKeys >= BTREE_DEGREE) {
+                borrowFromRight(parent, idx);
+                return;
+            }
+        }
+
+        if (idx != parent.numKeys) {
+            merge(parent, idx);
+        }
+        else {
+            merge(parent, idx - 1);
+        }
+    }
+
+    void removeFromLeaf(BTreeNode<K, V>& node, uint32_t idx) {
+        for (uint32_t i = idx; i < node.numKeys - 1; i++) {
+            node.keys[i] = node.keys[i + 1];
+            node.values[i] = node.values[i + 1];
+        }
+        node.numKeys--;
+    }
+
+    void removeFromNonLeaf(BTreeNode<K, V>& node, uint32_t idx) {
+        K key = node.keys[idx];
+        uint64_t nodeOffset = node.nodeOffset;
+
+        uint64_t leftChildOffset = node.children[idx];
+        uint64_t rightChildOffset = node.children[idx + 1];
+
+        BTreeNode<K, V> leftChild = readNode(leftChildOffset);
+        BTreeNode<K, V> rightChild = readNode(rightChildOffset);
+
+        if (leftChild.numKeys >= BTREE_DEGREE) {
+            K predKey;
+            V predValue;
+            getPredecessor(nodeOffset, idx, predKey, predValue);
+            node.keys[idx] = predKey;
+            node.values[idx] = predValue;
+            writeNode(node, nodeOffset);
+            removeInternal(leftChildOffset, predKey);
+        }
+        else if (rightChild.numKeys >= BTREE_DEGREE) {
+            K succKey;
+            V succValue;
+            getSuccessor(nodeOffset, idx, succKey, succValue);
+            node.keys[idx] = succKey;
+            node.values[idx] = succValue;
+            writeNode(node, nodeOffset);
+            removeInternal(rightChildOffset, succKey);
+        }
+        else {
+            merge(node, idx);
+            writeNode(node, nodeOffset);
+            removeInternal(leftChildOffset, key);
+        }
+    }
+
+    bool removeInternal(uint64_t nodeOffset, K key) {
+        if (nodeOffset == 0) {
+            return false;
+        }
+
+        BTreeNode<K, V> node = readNode(nodeOffset);
+
+        uint32_t idx = 0;
+        while (idx < node.numKeys && key > node.keys[idx]) {
+            idx++;
+        }
+
+        if (idx < node.numKeys && key == node.keys[idx]) {
+            if (node.isLeaf) {
+                removeFromLeaf(node, idx);
+                writeNode(node, nodeOffset);
+                return true;
+            }
+            else {
+                removeFromNonLeaf(node, idx);
+                return true;
+            }
+        }
+
+        if (node.isLeaf) {
+            return false;
+        }
+
+        bool isInSubtree = (idx < node.numKeys);
+
+        BTreeNode<K, V> child = readNode(node.children[idx]);
+        if (child.numKeys < BTREE_DEGREE) {
+            fill(node, idx);
+            node = readNode(nodeOffset);
+
+            idx = 0;
+            while (idx < node.numKeys && key > node.keys[idx]) {
+                idx++;
+            }
+
+            if (idx < node.numKeys && key == node.keys[idx]) {
+                if (node.isLeaf) {
+                    removeFromLeaf(node, idx);
+                    writeNode(node, nodeOffset);
+                    return true;
+                }
+                else {
+                    removeFromNonLeaf(node, idx);
+                    return true;
+                }
+            }
+        }
+
+        return removeInternal(node.children[idx], key);
+    }
+
 public:
     BTree(const string& filename) : indexFile(filename), rootOffset(0), nextFreeOffset(METADATA_SIZE) {
         file.open(indexFile, ios::in | ios::out | ios::binary);
@@ -434,6 +700,30 @@ public:
         file.write(reinterpret_cast<const char*>(&rootOffset), sizeof(uint64_t));
         file.write(reinterpret_cast<const char*>(&nextFreeOffset), sizeof(uint64_t));
         file.flush();
+    }
+
+    bool remove(K key) {
+        if (rootOffset == 0) {
+            return false;
+        }
+
+        bool removed = removeInternal(rootOffset, key);
+
+        if (removed) {
+            BTreeNode<K, V> root = readNode(rootOffset);
+
+            if (root.numKeys == 0) {
+                if (root.isLeaf) {
+                    rootOffset = 0;
+                }
+                else {
+                    rootOffset = root.children[0];
+                }
+                saveMetadata();
+            }
+        }
+
+        return removed;
     }
 
 };
