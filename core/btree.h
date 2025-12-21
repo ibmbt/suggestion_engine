@@ -5,6 +5,7 @@
 #include <vector>
 #include <fstream>
 #include <cstring>
+#include <string>
 #include <stdexcept>
 #include "types.h"
 
