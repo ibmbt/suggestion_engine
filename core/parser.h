@@ -3,6 +3,7 @@
 
 #include "recommendation_engine.h"
 #include "../authentication/auth_manager.h"
+#include "types.h"
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -10,9 +11,6 @@
 #include <string>
 
 using namespace std;
-
-const int BATCH_SIZE = 20000;
-
 
 class MovieLensParser {
 private:
