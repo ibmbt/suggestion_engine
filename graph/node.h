@@ -15,7 +15,7 @@ struct User {
     char username[MAX_USERNAME_LENGTH];
     uint32_t totalRatings;
     uint32_t avgRating;
-    uint64_t edgeFileOffset;      // if one field for all users
+    uint64_t edgeFileOffset;
 
     User() : userID(0), totalRatings(0), avgRating(0), edgeFileOffset(0) {
         memset(username, 0, MAX_USERNAME_LENGTH);

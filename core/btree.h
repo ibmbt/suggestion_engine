@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 #include <stdexcept>
+#include <mutex>
 #include "types.h"
 
 using namespace std;
@@ -93,7 +94,13 @@ private:
     fstream file;
     uint64_t nextFreeOffset;
 
+    mutable mutex fileMutex;
+
+
     BTreeNode<K, V> readNode(uint64_t offset) {
+
+        lock_guard<mutex> lock(fileMutex);
+
         if (offset == 0) {
             throw runtime_error("Cannot read at offset 0");
         }
@@ -117,6 +124,8 @@ private:
     }
 
     void writeNode(BTreeNode<K, V>& node, uint64_t offset) {
+        lock_guard<mutex> lock(fileMutex);
+
         if (offset == 0) {
             throw runtime_error("Cannot write at offset 0");
         }
