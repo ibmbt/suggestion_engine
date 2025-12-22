@@ -73,7 +73,7 @@ private:
             engine->edgeManager->writeRatings(uid, existingRatings);
 
             try {
-                UserNode u = engine->graphDB->getUser(uid);
+                User u = engine->graphDB->getUser(uid);
                 u.totalRatings = existingRatings.size();
                 engine->graphDB->updateUser(uid, u);
             }
@@ -93,9 +93,9 @@ private:
             pair<uint32_t, uint32_t>* stat = p.second;
 
             try {
-                MovieNode m = engine->graphDB->getMovie(mid);
+                Movie m = engine->graphDB->getMovie(mid);
                 m.ratingCount += stat->first;
-                m.sumRatingTimes100 += stat->second;
+                m.sumRating += stat->second;
                 engine->graphDB->updateMovie(mid, m);
             }
             catch (...) {}

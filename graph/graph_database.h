@@ -2,14 +2,14 @@
 #define GRAPH_DATABASE_H
 
 #include "../core/btree.h"
-#include "../core/bitmap.h"
+#include "../core/storage_manager.h"
 #include "../core/hash_table.h"
 #include "node.h"
-#include <iostream>
-#include <fstream>
 #include <vector>
-#include <stdexcept>
-#include <cstring>
+#include <algorithm>
+#include <set>
+
+const size_t MAX_MOVIES_PER_GENRE = 5000;
 
 using namespace std;
 
@@ -18,265 +18,159 @@ private:
     BTree<uint32_t, uint64_t>* userIndex;
     BTree<uint32_t, uint64_t>* movieIndex;
 
-    // Data files
-    fstream userDataFile;
-    fstream movieDataFile;
+    FixedStorage<User>* userStorage;
+    FixedStorage<Movie>* movieStorage;
 
-    Bitmap* userSlotBitmap;
-    Bitmap* movieSlotBitmap;
+    HashTable<string, vector<uint32_t>*>* genreIndex;
+    HashTable<string, uint32_t>* titleIndex;
 
-    uint32_t maxUserSlot;
-    uint32_t maxMovieSlot;
-
-    uint32_t totalUsers;
-    uint32_t totalMovies;
-
-
-    const string USER_DATA_FILE = "users.dat";
-    const string MOVIE_DATA_FILE = "movies.dat";
-    const string USER_INDEX_FILE = "user_index.dat";
-    const string MOVIE_INDEX_FILE = "movie_index.dat";
-    const string METADATA_FILE = "metadata.dat";
-
-    uint64_t slotToOffset(uint32_t slot, size_t nodeSize) const {
-        return METADATA_SIZE + (static_cast<uint64_t>(slot) * nodeSize);
+    string normalizeTitle(const string& title) const {
+        string normalized;
+        for (size_t i = 0; i < title.length(); i++) {
+            char c = title[i];
+            if (c >= 0 && c <= 127 && isalnum(static_cast<unsigned char>(c))) {
+                normalized += tolower(static_cast<unsigned char>(c));
+            }
+        }
+        return normalized;
     }
 
-    uint32_t offsetToSlot(uint64_t offset, size_t nodeSize) const {
-        return static_cast<uint32_t>((offset - METADATA_SIZE) / nodeSize);
-    }
-
-    static const size_t METADATA_HEADER_SIZE = 32;
-
-    void openDataFiles() {
-        userDataFile.open(USER_DATA_FILE, ios::in | ios::out | ios::binary);
-        if (!userDataFile.is_open()) {
-            userDataFile.open(USER_DATA_FILE, ios::out | ios::binary);
-            userDataFile.close();
-            userDataFile.open(USER_DATA_FILE, ios::in | ios::out | ios::binary);
-        }
-
-        movieDataFile.open(MOVIE_DATA_FILE, ios::in | ios::out | ios::binary);
-        if (!movieDataFile.is_open()) {
-            movieDataFile.open(MOVIE_DATA_FILE, ios::out | ios::binary);
-            movieDataFile.close();
-            movieDataFile.open(MOVIE_DATA_FILE, ios::in | ios::out | ios::binary);
-        }
-    }
-
-    void writeUser(uint64_t offset, const User& node) {
-        char buffer[User::getSize()];
-        node.serialize(buffer);
-
-        userDataFile.seekp(offset, ios::beg);
-        userDataFile.write(buffer, User::getSize());
-        userDataFile.flush();
-
-        if (userDataFile.fail()) {
-            throw runtime_error("Failed to write user node");
-        }
-    }
-
-    User readUser(uint64_t offset) {
-        char buffer[User::getSize()];
-
-        userDataFile.seekg(offset, ios::beg);
-        userDataFile.read(buffer, User::getSize());
-
-        if (userDataFile.fail() || userDataFile.gcount() != static_cast<streamsize>(User::getSize())) {
-            throw runtime_error("Failed to read user node");
-        }
-
-        return User::deserialize(buffer);
-    }
-
-    void writeMovie(uint64_t offset, const Movie& node) {
-        char buffer[Movie::getSize()];
-        node.serialize(buffer);
-
-        movieDataFile.seekp(offset, ios::beg);
-        movieDataFile.write(buffer, Movie::getSize());
-        movieDataFile.flush();
-
-        if (movieDataFile.fail()) {
-            throw runtime_error("Failed to write movie node");
-        }
-    }
-
-    Movie readMovie(uint64_t offset) {
-        char buffer[Movie::getSize()];
-
-        movieDataFile.seekg(offset, ios::beg);
-        movieDataFile.read(buffer, Movie::getSize());
-
-        if (movieDataFile.fail() || movieDataFile.gcount() != static_cast<streamsize>(Movie::getSize())) {
-            throw runtime_error("Failed to read movie node");
-        }
-
-        return Movie::deserialize(buffer);
-    }
-
-    void saveMetadata() {
-        fstream metaFile(METADATA_FILE, ios::out | ios::binary | ios::trunc);
-        if (!metaFile.is_open()) {
-            return;
-        }
-
-        metaFile.write(reinterpret_cast<const char*>(&totalUsers), sizeof(uint32_t));
-        metaFile.write(reinterpret_cast<const char*>(&totalMovies), sizeof(uint32_t));
-        metaFile.write(reinterpret_cast<const char*>(&maxUserSlot), sizeof(uint32_t));
-        metaFile.write(reinterpret_cast<const char*>(&maxMovieSlot), sizeof(uint32_t));
-
-        uint32_t userBitmapSize = static_cast<uint32_t>(userSlotBitmap->getByteSize());
-        uint32_t movieBitmapSize = static_cast<uint32_t>(movieSlotBitmap->getByteSize());
-        metaFile.write(reinterpret_cast<const char*>(&userBitmapSize), sizeof(uint32_t));
-        metaFile.write(reinterpret_cast<const char*>(&movieBitmapSize), sizeof(uint32_t));
-
-        char* userBitmapData = new char[userBitmapSize];
-        userSlotBitmap->serialize(userBitmapData);
-        metaFile.write(userBitmapData, userBitmapSize);
-        delete[] userBitmapData;
-
-        char* movieBitmapData = new char[movieBitmapSize];
-        movieSlotBitmap->serialize(movieBitmapData);
-        metaFile.write(movieBitmapData, movieBitmapSize);
-        delete[] movieBitmapData;
-
-        metaFile.close();
-    }
-
-    void loadMetadata() {
-        fstream metaFile(METADATA_FILE, ios::in | ios::binary);
-        if (!metaFile.is_open()) {
-            return;
-        }
-
-        try {
-            metaFile.read(reinterpret_cast<char*>(&totalUsers), sizeof(uint32_t));
-            metaFile.read(reinterpret_cast<char*>(&totalMovies), sizeof(uint32_t));
-            metaFile.read(reinterpret_cast<char*>(&maxUserSlot), sizeof(uint32_t));
-            metaFile.read(reinterpret_cast<char*>(&maxMovieSlot), sizeof(uint32_t));
-
-            if (metaFile.fail()) {
-                throw runtime_error("Failed to read metadata header");
+    void indexMovieGenres(uint32_t movieID, const vector<string>& genres) {
+        for (const string& genre : genres) {
+            vector<uint32_t>* movieList;
+            if (!genreIndex->find(genre, movieList)) {
+                movieList = new vector<uint32_t>();
+                movieList->reserve(100);
+                genreIndex->insert(genre, movieList);
             }
 
-            uint32_t userBitmapSize = 0;
-            uint32_t movieBitmapSize = 0;
-            metaFile.read(reinterpret_cast<char*>(&userBitmapSize), sizeof(uint32_t));
-            metaFile.read(reinterpret_cast<char*>(&movieBitmapSize), sizeof(uint32_t));
-
-            if (metaFile.fail()) {
-                throw runtime_error("Failed to read bitmap sizes");
+            if (find(movieList->begin(), movieList->end(), movieID) == movieList->end()) {
+                if (movieList->size() < MAX_MOVIES_PER_GENRE) {
+                    movieList->push_back(movieID);
+                }
             }
-
-            char* userBitmapData = new char[userBitmapSize];
-            metaFile.read(userBitmapData, userBitmapSize);
-            if (!metaFile.fail()) {
-                userSlotBitmap->deserialize(userBitmapData);
-            }
-            delete[] userBitmapData;
-
-            char* movieBitmapData = new char[movieBitmapSize];
-            metaFile.read(movieBitmapData, movieBitmapSize);
-            if (!metaFile.fail()) {
-                movieSlotBitmap->deserialize(movieBitmapData);
-            }
-            delete[] movieBitmapData;
-
         }
-        catch (...) {
-            totalUsers = 0;
-            totalMovies = 0;
-            maxUserSlot = 0;
-            maxMovieSlot = 0;
-        }
+    }
 
-        metaFile.close();
+    void removeMovieFromGenreIndex(uint32_t movieID, const vector<string>& genres) {
+        for (const string& genre : genres) {
+            vector<uint32_t>* movieList;
+            if (genreIndex->find(genre, movieList)) {
+                movieList->erase(
+                    remove(movieList->begin(), movieList->end(), movieID),
+                    movieList->end()
+                );
+            }
+        }
     }
 
 public:
     GraphDatabase() {
-        userIndex = new BTree<uint32_t, uint64_t>(USER_INDEX_FILE);
-        movieIndex = new BTree<uint32_t, uint64_t>(MOVIE_INDEX_FILE);
+        userIndex = new BTree<uint32_t, uint64_t>("user_index.dat");
+        movieIndex = new BTree<uint32_t, uint64_t>("movie_index.dat");
 
-        userSlotBitmap = new Bitmap(MAX_SLOTS);
-        movieSlotBitmap = new Bitmap(MAX_SLOTS);
+        userStorage = new FixedStorage<User>(
+            "users.dat",
+            User::getSize(),
+            USERS_PER_BLOCK
+        );
+        movieStorage = new FixedStorage<Movie>(
+            "movies.dat",
+            Movie::getSize(),
+            MOVIES_PER_BLOCK
+        );
 
-        openDataFiles();
+        genreIndex = new HashTable<string, vector<uint32_t>*>(211);
+        titleIndex = new HashTable<string, uint32_t>(10007);
 
-        maxUserSlot = 0;
-        maxMovieSlot = 0;
-        totalUsers = 0;
-        totalMovies = 0;
-
-        loadMetadata();
+        rebuildIndices();
     }
 
     ~GraphDatabase() {
-        saveMetadata();
-
         delete userIndex;
         delete movieIndex;
-        delete userSlotBitmap;
-        delete movieSlotBitmap;
+        delete userStorage;
+        delete movieStorage;
 
-        if (userDataFile.is_open()) userDataFile.close();
-        if (movieDataFile.is_open()) movieDataFile.close();
+        vector<string> genres = getAllGenresFromIndex();
+        for (const string& genre : genres) {
+            vector<uint32_t>* list;
+            if (genreIndex->find(genre, list)) {
+                delete list;
+            }
+        }
+        delete genreIndex;
+        delete titleIndex;
     }
 
+    void rebuildIndices() {
+        vector<pair<uint32_t, uint64_t>> allMovies = movieIndex->getAllPairs();
+
+        for (const auto& pair : allMovies) {
+            try {
+                Movie movie = movieStorage->readNode(pair.first);
+
+                vector<string> genres = movie.getGenres();
+                indexMovieGenres(movie.movieID, genres);
+
+                string normTitle = normalizeTitle(movie.getTitle());
+                titleIndex->insert(normTitle, movie.movieID);
+            }
+            catch (...) {
+                continue;
+            }
+        }
+    }
+
+    vector<uint32_t> getMoviesByGenre(const string& genre) {
+        vector<uint32_t>* movieList;
+        if (genreIndex->find(genre, movieList)) {
+            return *movieList;
+        }
+        return vector<uint32_t>();
+    }
+
+    vector<uint32_t> searchMoviesByTitle(const string& query) {
+        vector<uint32_t> results;
+        string normQuery = normalizeTitle(query);
+
+        if (normQuery.empty()) return results;
+
+        vector<pair<string, uint32_t>> allTitles = titleIndex->getAllPairs();
+
+        for (const auto& pair : allTitles) {
+            if (pair.first.find(normQuery) != string::npos) {
+                results.push_back(pair.second);
+            }
+        }
+
+        return results;
+    }
+
+    vector<string> getAllGenresFromIndex() {
+        return genreIndex->getAllKeys();
+    }
 
     void addUser(uint32_t userID, const string& username) {
-        uint64_t existingOffset;
-        if (userIndex->search(userID, existingOffset)) {
-            throw runtime_error("User already exists");
-        }
-
-        User node(userID, username);
-
-        uint32_t slot = userSlotBitmap->findFreeBlock();
-        if (slot >= MAX_SLOTS) {
-            throw runtime_error("User storage capacity exceeded");
-        }
-
-        userSlotBitmap->setBit(slot);
-
-        if (slot > maxUserSlot) {
-            maxUserSlot = slot;
-        }
-
-        uint64_t offset = slotToOffset(slot, User::getSize());
-
-        writeUser(offset, node);
-
-        userIndex->insert(userID, offset);
-
-        totalUsers++;
-
+        User user(userID, username);
+        userStorage->writeNode(userID, user);
+        userIndex->insert(userID, userID);
     }
 
     User getUser(uint32_t userID) {
-
         uint64_t offset;
         if (!userIndex->search(userID, offset)) {
-            throw runtime_error("User does not exist");
+            throw runtime_error("User not found");
         }
-
-        User node = readUser(offset);
-
-        if (node.userID != userID) {
-            throw runtime_error("Data corruption: ID mismatch");
-        }
-        return node;
+        return userStorage->readNode(userID);
     }
 
-    void updateUser(uint32_t userID, const User& node) {
+    void updateUser(uint32_t userID, const User& user) {
         uint64_t offset;
         if (!userIndex->search(userID, offset)) {
-            throw runtime_error("User does not exist");
+            throw runtime_error("User not found");
         }
-
-        writeUser(offset, node);
+        userStorage->writeNode(userID, user);
     }
 
     bool userExists(uint32_t userID) {
@@ -285,71 +179,59 @@ public:
     }
 
     void deleteUser(uint32_t userID) {
-        uint64_t offset;
-        if (!userIndex->search(userID, offset)) {
-            throw runtime_error("User does not exist");
+        userIndex->remove(userID);
+    }
+
+    vector<uint32_t> getAllUserIDs() {
+        vector<uint32_t> ids;
+        vector<pair<uint32_t, uint64_t>> pairs = userIndex->getAllPairs();
+        for (const auto& p : pairs) {
+            ids.push_back(p.first);
         }
+        return ids;
+    }
 
-        uint32_t slot = offsetToSlot(offset, User::getSize());
-        userSlotBitmap->clearBit(slot);
-
-        totalUsers--;
+    size_t getUserCount() {
+        return userIndex->size();
     }
 
     void addMovie(uint32_t movieID, const string& title, const vector<string>& genres) {
-        uint64_t existingOffset;
-        if (movieIndex->search(movieID, existingOffset)) {
-            throw runtime_error("Movie already exists");
-        }
+        Movie movie(movieID, title, genres);
+        movieStorage->writeNode(movieID, movie);
+        movieIndex->insert(movieID, movieID);
 
-        Movie node(movieID, title, genres);
-
-        uint32_t slot = movieSlotBitmap->findFreeBlock();
-        if (slot >= MAX_SLOTS) {
-            throw runtime_error("Movie storage capacity exceeded");
-        }
-
-        movieSlotBitmap->setBit(slot);
-
-        if (slot > maxMovieSlot) {
-            maxMovieSlot = slot;
-        }
-
-        uint64_t offset = slotToOffset(slot, Movie::getSize());
-
-        writeMovie(offset, node);
-
-        movieIndex->insert(movieID, offset);
-
-        totalMovies++;
-
+        indexMovieGenres(movieID, genres);
+        string normTitle = normalizeTitle(title);
+        titleIndex->insert(normTitle, movieID);
     }
 
     Movie getMovie(uint32_t movieID) {
-
-
         uint64_t offset;
         if (!movieIndex->search(movieID, offset)) {
-            throw runtime_error("Movie does not exist");
+            throw runtime_error("Movie not found");
         }
-
-        Movie node = readMovie(offset);
-
-        if (node.movieID != movieID) {
-            throw runtime_error("Data corruption: ID mismatch");
-        }
-
-
-        return node;
+        return movieStorage->readNode(movieID);
     }
 
-    void updateMovie(uint32_t movieID, const Movie& node) {
+    void updateMovie(uint32_t movieID, const Movie& movie) {
         uint64_t offset;
         if (!movieIndex->search(movieID, offset)) {
-            throw runtime_error("Movie does not exist");
+            throw runtime_error("Movie not found");
         }
 
-        writeMovie(offset, node);
+        try {
+            Movie oldMovie = movieStorage->readNode(movieID);
+            removeMovieFromGenreIndex(movieID, oldMovie.getGenres());
+            string oldTitle = normalizeTitle(oldMovie.getTitle());
+            titleIndex->remove(oldTitle);
+        }
+        catch (...) {}
+
+        movieStorage->writeNode(movieID, movie);
+
+        indexMovieGenres(movieID, movie.getGenres());
+        string normTitle = normalizeTitle(movie.getTitle());
+        titleIndex->insert(normTitle, movieID);
     }
 
     bool movieExists(uint32_t movieID) {
@@ -358,51 +240,33 @@ public:
     }
 
     void deleteMovie(uint32_t movieID) {
-        uint64_t offset;
-        if (!movieIndex->search(movieID, offset)) {
-            throw runtime_error("Movie does not exist");
+        try {
+            Movie movie = movieStorage->readNode(movieID);
+            removeMovieFromGenreIndex(movieID, movie.getGenres());
+            string normTitle = normalizeTitle(movie.getTitle());
+            titleIndex->remove(normTitle);
         }
+        catch (...) {}
 
-        uint32_t slot = offsetToSlot(offset, Movie::getSize());
-        movieSlotBitmap->clearBit(slot);
-
-        totalMovies--;
-    }
-
-    vector<uint32_t> getAllUserIDs() {
-        vector<uint32_t> ids;
-        ids.reserve(totalUsers);
-
-        vector<pair<uint32_t, uint64_t>> pairs = userIndex->getAllPairs();
-
-        for (size_t i = 0; i < pairs.size(); i++) {
-            ids.push_back(pairs[i].first);
-        }
-
-        return ids;
+        movieIndex->remove(movieID);
     }
 
     vector<uint32_t> getAllMovieIDs() {
         vector<uint32_t> ids;
-        ids.reserve(totalMovies);
-
         vector<pair<uint32_t, uint64_t>> pairs = movieIndex->getAllPairs();
-
-        for (size_t i = 0; i < pairs.size(); i++) {
-            ids.push_back(pairs[i].first);
+        for (const auto& p : pairs) {
+            ids.push_back(p.first);
         }
-
         return ids;
     }
 
-    uint32_t getUserCount() const {
-        return totalUsers;
+    vector<pair<uint32_t, uint64_t>> getMovieIndex() {
+        return movieIndex->getAllPairs();
     }
 
-    uint32_t getMovieCount() const {
-        return totalMovies;
+    size_t getMovieCount() {
+        return movieIndex->size();
     }
-
 };
 
-#endif 
+#endif

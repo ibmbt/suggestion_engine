@@ -1,15 +1,45 @@
 #ifndef RECOMMENDATION_ENGINE_H
 #define RECOMMENDATION_ENGINE_H
 
-#include "graph_database.h"
+#include "../graph/graph_database.h"
 #include "storage_manager.h"
 #include "hash_table.h"
-#include <queue> // if not allowed i will change to custom minheap implementation
+#include <queue> 
 #include <cmath>
 #include <algorithm>
 #include <set>
 
 using namespace std;
+
+class MovieLockManager {
+private:
+    HashTable<uint32_t, mutex*>* locks;
+    mutex managerMutex;
+
+public:
+    MovieLockManager() {
+        locks = new HashTable<uint32_t, mutex*>(2003);
+    }
+
+    ~MovieLockManager() {
+        vector<pair<uint32_t, mutex*>> allLocks = locks->getAllPairs();
+        for (const auto& p : allLocks) {
+            delete p.second;
+        }
+        delete locks;
+    }
+
+    mutex& getLock(uint32_t movieID) {
+        lock_guard<mutex> guard(managerMutex);
+
+        mutex* m;
+        if (!locks->find(movieID, m)) {
+            m = new mutex();
+            locks->insert(movieID, m);
+        }
+        return *m;
+    }
+};
 
 struct MovieScore {
     uint32_t movieID;
@@ -56,12 +86,12 @@ class RecommendationEngine {
 private:
     GraphDatabase* graphDB;
     EdgeFileManager* edgeManager;
-
+    MovieLockManager* movieLocks;
 
     friend class MovieLensParser;
 
 
-    float calculateMovieScore(const MovieNode& movie, const UserProfile& profile) {
+    float calculateMovieScore(const Movie& movie, const UserProfile& profile) {
         bool alreadyRated = false;
         if (profile.ratedMovies->find(movie.movieID, alreadyRated)) {
             return -1.0f;
@@ -122,7 +152,7 @@ private:
             RatingEdge rating = userRatings[i];
 
             try {
-                MovieNode movie = graphDB->getMovie(rating.movieID);
+                Movie movie = graphDB->getMovie(rating.movieID);
                 float userRating = rating.getRating();
                 vector<string> genres = movie.getGenres();
 
@@ -161,7 +191,7 @@ private:
         vector<RecommendationResult> results;
         for (size_t i = 0; i < topMovies.size(); i++) {
             try {
-                MovieNode movie = graphDB->getMovie(topMovies[i].movieID);
+                Movie movie = graphDB->getMovie(topMovies[i].movieID);
 
                 RecommendationResult result;
                 result.movieID = topMovies[i].movieID;
@@ -223,7 +253,7 @@ private:
 
         for (uint32_t movieID : candidates) {
             try {
-                MovieNode movie = graphDB->getMovie(movieID);
+                Movie movie = graphDB->getMovie(movieID);
                 float score = calculateMovieScore(movie, *profile);
 
                 if (score < 0) continue;
@@ -255,11 +285,13 @@ public:
     RecommendationEngine() {
         graphDB = new GraphDatabase();
         edgeManager = new EdgeFileManager("ratings");
+        movieLocks = new MovieLockManager();
     }
 
     ~RecommendationEngine() {
         delete graphDB;
         delete edgeManager;
+        delete movieLocks;
     }
 
     vector<RecommendationResult> getColdStartRecommendations(int limitPerGenre = 1) {
@@ -278,38 +310,55 @@ public:
         for (const string& genre : majorGenres) {
             vector<uint32_t> ids = graphDB->getMoviesByGenre(genre);
 
-            uint32_t bestID = 0;
-            float bestRating = -1.0f;
+            priority_queue<MovieScore, vector<MovieScore>, greater<MovieScore>> topMovies;
 
-            for (uint32_t id : ids) {
+            size_t examineCount = min(ids.size(), (size_t)50);
+
+            for (size_t i = 0; i < examineCount; i++) {
                 try {
-                    MovieNode m = getMovie(id);
-                    if (m.ratingCount > 10 && m.getAvgRating() > bestRating) {
-                        if (addedMovies.find(id) == addedMovies.end()) {
-                            bestRating = m.getAvgRating();
-                            bestID = id;
-                        }
+                    Movie m = getMovie(ids[i]);
+
+                    if (m.ratingCount < 10) continue;
+
+                    if (addedMovies.find(ids[i]) != addedMovies.end()) continue;
+
+                    float score = m.getAvgRating();
+
+                    if (topMovies.size() < (size_t)limitPerGenre) {
+                        MovieScore ms;
+                        ms.movieID = ids[i];
+                        ms.score = score;
+                        topMovies.push(ms);
+                    }
+                    else if (score > topMovies.top().score) {
+                        topMovies.pop();
+                        MovieScore ms;
+                        ms.movieID = ids[i];
+                        ms.score = score;
+                        topMovies.push(ms);
                     }
                 }
                 catch (...) {}
             }
 
-            if (bestID != 0) {
+            if (!topMovies.empty()) {
+                MovieScore best = topMovies.top();
                 try {
-                    MovieNode m = getMovie(bestID);
+                    Movie m = getMovie(best.movieID);
                     RecommendationResult res;
-                    res.movieID = bestID;
+                    res.movieID = best.movieID;
                     res.title = m.getTitle();
                     res.genres = m.getGenres();
                     res.avgRating = m.getAvgRating();
                     res.ratingCount = m.ratingCount;
-                    res.score = bestRating;
+                    res.score = best.score;
                     results.push_back(res);
-                    addedMovies.insert(bestID);
+                    addedMovies.insert(best.movieID);
                 }
                 catch (...) {}
             }
         }
+
         return results;
     }
 
@@ -336,8 +385,8 @@ public:
         return graphDB->getAllGenresFromIndex();
     }
 
-    vector<MovieNode> searchMoviesByTitle(const string& query) {
-        vector<MovieNode> matches;
+    vector<Movie> searchMoviesByTitle(const string& query) {
+        vector<Movie> matches;
         vector<uint32_t> movieIDs = graphDB->searchMoviesByTitle(query);
 
         for (uint32_t id : movieIDs) {
@@ -359,7 +408,7 @@ public:
         graphDB->addUser(userID, username);
     }
 
-    UserNode getUserProfile(uint32_t userID) {
+    User getUserProfile(uint32_t userID) {
         return graphDB->getUser(userID);
     }
 
@@ -387,7 +436,7 @@ public:
         graphDB->addMovie(movieID, title, genres);
     }
 
-    MovieNode getMovie(uint32_t movieID) {
+    Movie getMovie(uint32_t movieID) {
         return graphDB->getMovie(movieID);
     }
 
@@ -424,18 +473,23 @@ public:
         bool hadRating = edgeManager->getRating(userID, movieID, oldRating);
 
         edgeManager->addOrUpdateRating(userID, movieID, rating);
+        {
+            lock_guard<mutex> movieLock(movieLocks->getLock(movieID));
 
-        MovieNode movie = getMovie(movieID);
-        if (hadRating) {
-            movie.updateRating(oldRating, rating);
+            Movie movie = getMovie(movieID);
+
+            if (hadRating) {
+                movie.updateRating(oldRating, rating);
+            }
+            else {
+                movie.addRating(rating);
+            }
+
+            graphDB->updateMovie(movieID, movie);
         }
-        else {
-            movie.addRating(rating);
-        }
-        graphDB->updateMovie(movieID, movie);
 
         if (!hadRating) {
-            UserNode user = getUserProfile(userID);
+            User user = getUserProfile(userID);
             user.totalRatings = user.totalRatings + 1;
             graphDB->updateUser(userID, user);
         }
@@ -468,7 +522,7 @@ public:
 
         for (uint32_t movieID : allMovies) {
             try {
-                MovieNode movie = graphDB->getMovie(movieID);
+                Movie movie = graphDB->getMovie(movieID);
 
                 if (movie.ratingCount < 5) {
                     continue;
