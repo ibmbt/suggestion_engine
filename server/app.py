@@ -403,64 +403,72 @@ def show_recommendations():
             client = st.session_state.client
             result = client.send_message(GET_RECOMMENDATIONS, st.session_state.user_id, str(top_n))
             
+            show_cold_start = False
+            
             if result:
                 resp_type, _, resp_data = result
                 
-                if resp_type == SUCCESS and resp_data:
+                if resp_type == SUCCESS and resp_data and resp_data.strip():
                     lines = resp_data.strip().split('\n')
                     
-                    if lines and lines[0]:
+                    st.markdown("---")
+                    for idx, line in enumerate(lines[:top_n], 1):
+                        if not line: continue
+                        
+                        parts = line.split('|')
+                        if len(parts) >= 5:
+                            movie_id, title, score, avg_rating, genres = parts[0], parts[1], parts[2], parts[3], parts[4]
+                            
+                            st.markdown(f"""
+                            <div class="movie-card">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div style="flex: 1;">
+                                        <div class="movie-title">{idx}. {title}</div>
+                                        <div class="movie-genres">🎭 {genres}</div>
+                                    </div>
+                                    <div style="text-align: right; margin-left: 15px;">
+                                        <div class="match-score">{float(score):.1f}% Match</div>
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                else:
+                    show_cold_start = True
+            else:
+                show_cold_start = True
+
+            if show_cold_start:
+                st.info("👋 New here? We are building your taste profile. Meanwhile, check out these top-rated hits!")
+                
+                result2 = client.send_message(GET_COLD_START, st.session_state.user_id, "")
+                
+                if result2:
+                    resp_type2, _, resp_data2 = result2
+                    if resp_type2 == SUCCESS and resp_data2:
+                        lines2 = resp_data2.strip().split('\n')
                         st.markdown("---")
-                        for idx, line in enumerate(lines[:top_n], 1):
-                            if not line:
-                                continue
+                        for idx, line in enumerate(lines2, 1):
+                            if not line: continue
+                            
                             parts = line.split('|')
-                            if len(parts) >= 5:
-                                movie_id, title, score, avg_rating, genres = parts[0], parts[1], parts[2], parts[3], parts[4]
+                            if len(parts) >= 3:
+                                movie_id, title, rating = parts[0], parts[1], parts[2]
+                                genres = parts[3] if len(parts) > 3 else "Popular"
                                 
                                 st.markdown(f"""
                                 <div class="movie-card">
                                     <div style="display: flex; justify-content: space-between; align-items: center;">
                                         <div style="flex: 1;">
                                             <div class="movie-title">{idx}. {title}</div>
-                                            <div class="movie-genres">🎭 {genres}</div>
+                                            <div class="movie-genres">🔥 {genres}</div>
                                         </div>
                                         <div style="text-align: right; margin-left: 15px;">
-                                            <div class="match-score">{float(score):.1f}% Match</div>
+                                            <div class="rating-badge">⭐ {float(rating):.1f}</div>
                                         </div>
                                     </div>
                                 </div>
                                 """, unsafe_allow_html=True)
-                    else:
-                        st.info("🎬 Building your taste profile... Here are some acclaimed films to start!")
-                        result2 = client.send_message(GET_COLD_START, st.session_state.user_id, "")
-                        
-                        if result2:
-                            resp_type2, _, resp_data2 = result2
-                            if resp_type2 == SUCCESS:
-                                lines2 = resp_data2.strip().split('\n')
-                                st.markdown("---")
-                                for idx, line in enumerate(lines2, 1):
-                                    if not line:
-                                        continue
-                                    parts = line.split('|')
-                                    if len(parts) >= 3:
-                                        movie_id, title, rating = parts[0], parts[1], parts[2]
-                                        genres = parts[3] if len(parts) > 3 else ""
-                                        
-                                        st.markdown(f"""
-                                        <div class="movie-card">
-                                            <div style="display: flex; justify-content: space-between; align-items: center;">
-                                                <div style="flex: 1;">
-                                                    <div class="movie-title">{idx}. {title}</div>
-                                                    <div class="movie-genres">🎭 {genres}</div>
-                                                </div>
-                                                <div style="text-align: right; margin-left: 15px;">
-                                                    <div class="rating-badge">⭐ {float(rating):.1f}</div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        """, unsafe_allow_html=True)
+
 
 def show_rate_movies():
     st.title("⭐ Rate Movies")
