@@ -71,8 +71,14 @@ void handleSignal(int sig) {
 
 void copyToBuffer(char* buffer, const string& source, size_t size) {
     memset(buffer, 0, size);
-    size_t len = min(source.size(), size - 1);
-    memcpy(buffer, source.c_str(), len);
+    size_t len = source.length();
+    if (len >= size) {
+        len = size - 1;
+    }
+    if (len > 0) {
+        memcpy(buffer, source.c_str(), len);
+    }
+    buffer[len] = '\0';
 }
 
 vector<string> splitString(const string& str, char delimiter) {
@@ -150,7 +156,9 @@ void handleRegister(Message& request, Message& response) {
 
         {
             lock_guard<mutex> engineLock(engineMutex);
-            engine->createUser(userID, username);
+            if (!engine->userExists(userID)) {
+                engine->createUser(userID, username);
+            }
         }
 
         response.type = SUCCESS;

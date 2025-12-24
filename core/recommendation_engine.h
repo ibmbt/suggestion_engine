@@ -90,6 +90,23 @@ private:
 
     friend class MovieLensParser;
 
+    void validateUserID(uint32_t userID) const {
+        if (userID == 0 || userID > MAX_SLOTS) {
+            throw runtime_error("Invalid user ID");
+        }
+    }
+
+    void validateMovieID(uint32_t movieID) const {
+        if (movieID == 0 || movieID > MAX_SLOTS) {
+            throw runtime_error("Invalid movie ID");
+        }
+    }
+
+    void validateRating(float rating) const {
+        if (rating < MIN_RATING || rating > MAX_RATING) {
+            throw runtime_error("Rating must be between 1.0 and 5.0");
+        }
+    }
 
     float calculateMovieScore(const Movie& movie, const UserProfile& profile) {
         bool alreadyRated = false;
@@ -113,7 +130,7 @@ private:
 
             float genreWeight = 1.0f;
             if (i == 0) {
-                genreWeight = 3.0f;
+                genreWeight = 1.5f;
             }
 
             genreMatchScore = genreMatchScore + (userGenreScore * genreWeight);
@@ -386,7 +403,13 @@ public:
     }
 
     vector<Movie> searchMoviesByTitle(const string& query) {
+
         vector<Movie> matches;
+
+        if (query.empty() || query.length() < 2) {
+            return matches;
+        }
+
         vector<uint32_t> movieIDs = graphDB->searchMoviesByTitle(query);
 
         for (uint32_t id : movieIDs) {
@@ -457,22 +480,17 @@ public:
     }
 
     void addRating(uint32_t userID, uint32_t movieID, float rating) {
-        if (rating < MIN_RATING || rating > MAX_RATING) {
-            throw runtime_error("Rating must be between 1.0 and 5.0");
-        }
 
-        if (!userExists(userID)) {
-            throw runtime_error("User does not exist");
-        }
+        validateUserID(userID);
+        validateMovieID(movieID);
+        validateRating(rating);
 
-        if (!movieExists(movieID)) {
-            throw runtime_error("Movie does not exist");
-        }
 
         float oldRating;
         bool hadRating = edgeManager->getRating(userID, movieID, oldRating);
 
         edgeManager->addOrUpdateRating(userID, movieID, rating);
+
         {
             lock_guard<mutex> movieLock(movieLocks->getLock(movieID));
 

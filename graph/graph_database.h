@@ -134,7 +134,9 @@ public:
         vector<uint32_t> results;
         string normQuery = normalizeTitle(query);
 
-        if (normQuery.empty()) return results;
+        if (normQuery.empty() || normQuery.length() < 2) {
+            return results;
+        }
 
         vector<pair<string, uint32_t>> allTitles = titleIndex->getAllPairs();
 
