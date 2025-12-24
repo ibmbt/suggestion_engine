@@ -202,11 +202,22 @@ SUCCESS = 100
 ERROR = 101
 
 class MovieClient:
-    def __init__(self, host='127.0.0.1', port=8080):
+    def __init__(self, host='13.201.74.125', port=8080):
         self.host = host
         self.port = port
         self.sock = None
         
+
+    def recv_all(self, n):
+        data = bytearray()
+        while len(data) < n:
+            packet = self.sock.recv(n - len(data))
+            if not packet:
+                return None
+            data.extend(packet)
+        return data
+
+
     def connect(self):
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -228,7 +239,10 @@ class MovieClient:
             
             self.sock.sendall(msg)
             
-            response = self.sock.recv(8200)
+            response = self.recv_all(8200)
+            if not response:
+                return None
+            
             resp_type = struct.unpack('i', response[:4])[0]
             resp_user_id = struct.unpack('i', response[4:8])[0]
             resp_data = response[8:].rstrip(b'\x00').decode('utf-8', errors='ignore')
