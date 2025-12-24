@@ -97,8 +97,19 @@ bool sendMsg(int socket, Message& msg) {
 }
 
 bool recvMsg(int socket, Message& msg) {
-    int received = recv(socket, &msg, sizeof(Message), 0);
-    return received > 0;
+    char* buffer = (char*)&msg;
+    int bytesRead = 0;
+    int totalBytes = sizeof(Message);
+
+    while (bytesRead < totalBytes) {
+        int result = recv(socket, buffer + bytesRead, totalBytes - bytesRead, 0);
+
+        if (result <= 0) {
+            return false;
+        }
+        bytesRead += result;
+    }
+    return true;
 }
 
 
