@@ -41,10 +41,14 @@ int currentUserID = 0;
 bool loggedIn = false;
 
 void copyToBuffer(char* buffer, const string& source, size_t size) {
+    memset(buffer, 0, size);
     size_t len = source.length();
-    if (len >= size) len = size - 1;
-
-    strncpy(buffer, source.c_str(), len);
+    if (len >= size) {
+        len = size - 1;
+    }
+    if (len > 0) {
+        memcpy(buffer, source.c_str(), len);
+    }
     buffer[len] = '\0';
 }
 
