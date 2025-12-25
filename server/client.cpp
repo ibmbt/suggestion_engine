@@ -774,8 +774,8 @@ void showUserMenu() {
 }
 
 int main(int argc, char* argv[]) {
-    string serverIP = "127.0.0.1";
-    int serverPort = 8080;
+    string serverIP = "127.0.0.1"; // change to aws instance if not working on localhost
+    int serverPort = 8080; // change to aws port that is open
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--server") == 0 && i + 1 < argc) {
@@ -788,7 +788,7 @@ int main(int argc, char* argv[]) {
 
     clearScreen();
     cout << "+--------------------------------------+" << endl;
-    cout << "|    MOVIE RECOMMENDATION SYSTEM v2.0  |" << endl;
+    cout << "|    MOVIE RECOMMENDATION SYSTEM       |" << endl;
     cout << "+--------------------------------------+" << endl;
 
     if (!connectToServer(serverIP, serverPort)) {
