@@ -202,7 +202,7 @@ SUCCESS = 100
 ERROR = 101
 
 class MovieClient:
-    def __init__(self, host='13.201.74.125', port=8080):
+    def __init__(self, host='13.201.74.125', port=8080): # change port and ip for aws instance
         self.host = host
         self.port = port
         self.sock = None
