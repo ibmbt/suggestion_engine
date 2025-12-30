@@ -202,7 +202,7 @@ SUCCESS = 100
 ERROR = 101
 
 class MovieClient:
-    def __init__(self, host='13.201.74.125', port=8080): # change port and ip for aws instance
+    def __init__(self, host='127.0.0.1', port=8080): # change port and ip for aws instance
         self.host = host
         self.port = port
         self.sock = None
@@ -514,6 +514,8 @@ def show_rate_movies():
 def show_my_ratings():
     st.title("📊 My Ratings")
     
+    search_filter = st.text_input("🔍 Search your rated movies", placeholder="Filter by title...")
+    
     client = st.session_state.client
     result = client.send_message(GET_USER_RATINGS, st.session_state.user_id, "")
     
@@ -524,9 +526,8 @@ def show_my_ratings():
                 st.info("You haven't rated any movies yet. Start rating to get personalized recommendations!")
             else:
                 lines = resp_data.strip().split('\n')
-                st.markdown(f"**Total: {len(lines)} ratings**")
-                st.markdown("---")
                 
+                movies_data = []
                 for line in lines:
                     if not line:
                         continue
@@ -540,19 +541,35 @@ def show_my_ratings():
                             detail_parts = detail_result[2].split('|')
                             if len(detail_parts) >= 2:
                                 title = detail_parts[1]
-                                
-                                st.markdown(f"""
-                                <div class="movie-card">
-                                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                                        <div style="flex: 1;">
-                                            <div class="movie-title">{title}</div>
-                                        </div>
-                                        <div style="text-align: right; margin-left: 15px;">
-                                            <div class="rating-badge">⭐ {float(rating):.1f}</div>
-                                        </div>
-                                    </div>
+                                movies_data.append((title, rating))
+                
+                if search_filter:
+                    filtered_movies = [(title, rating) for title, rating in movies_data 
+                                     if search_filter.lower() in title.lower()]
+                else:
+                    filtered_movies = movies_data
+                
+                st.markdown(f"**Showing {len(filtered_movies)} of {len(movies_data)} ratings**")
+                st.markdown("---")
+                
+                if not filtered_movies:
+                    st.warning("No movies match your search.")
+                else:
+                    for title, rating in filtered_movies:
+                        st.markdown(f"""
+                        <div class="movie-card">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div style="flex: 1;">
+                                    <div class="movie-title">{title}</div>
                                 </div>
-                                """, unsafe_allow_html=True)
+                                <div style="text-align: right; margin-left: 15px;">
+                                    <div class="rating-badge">⭐ {float(rating):.1f}</div>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+
 
 def show_search():
     st.title("🔍 Discover Movies")
