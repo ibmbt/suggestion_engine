@@ -575,7 +575,6 @@ private:
             return false;
         }
 
-        bool isInSubtree = (idx < node.numKeys);
 
         BTreeNode<K, V> child = readNode(node.children[idx]);
         if (child.numKeys < BTREE_DEGREE) {
@@ -604,7 +603,7 @@ private:
     }
 
 public:
-    BTree(const string& filename) : indexFile(filename), rootOffset(0), nextFreeOffset(METADATA_SIZE) {
+    BTree(const string& filename) : rootOffset(0), indexFile(filename), nextFreeOffset(METADATA_SIZE) {
         file.open(indexFile, ios::in | ios::out | ios::binary);
 
         if (!file.is_open()) {
@@ -665,6 +664,10 @@ public:
         else {
             insertNonFull(rootOffset, key, value);
         }
+
+        // Splits inside insertNonFull may allocate new nodes; persist the
+        // allocator position so a crash can't cause nodes to be overwritten.
+        saveMetadata();
     }
 
     bool search(K key, V& value) {

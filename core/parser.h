@@ -17,6 +17,7 @@ private:
     RecommendationEngine* engine;
     AuthManager* auth;
     string datasetPath;
+    string seedPassword;
 
     vector<string> split(const string& str, char delim) {
         vector<string> tokens;
@@ -106,8 +107,9 @@ private:
     }
 
 public:
-    MovieLensParser(RecommendationEngine* eng, AuthManager* authMgr, const string& path = "../ml-100k")
-        : engine(eng), auth(authMgr), datasetPath(path) {
+    MovieLensParser(RecommendationEngine* eng, AuthManager* authMgr, const string& path = "../ml-100k",
+        const string& seedPwd = "movielens123")
+        : engine(eng), auth(authMgr), datasetPath(path), seedPassword(seedPwd) {
     }
 
     bool parseMovies() {
@@ -181,10 +183,8 @@ public:
 
                 uint32_t userID = stoi(trim(parts[0]));
                 string username = "user" + to_string(userID);
-                string defaultPassword = "movielens123";
-
                 try {
-                    auth->registerUser(username, defaultPassword);
+                    auth->registerUser(username, seedPassword);
                 }
                 catch (const exception& e) {
                 }
@@ -203,7 +203,8 @@ public:
 
         file.close();
         cout << "[OK] Loaded " << count << " users (" << errors << " errors)" << endl;
-        cout << "[INFO] Default password for all users: movielens123" << endl;
+        cout << "[INFO] Seeded accounts user1..user" << count
+             << " share the password given by --seed-password" << endl;
         return true;
     }
 

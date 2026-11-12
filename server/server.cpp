@@ -52,6 +52,8 @@ const int LOGOUT = 14;
 const int SUCCESS = 100;
 const int ERROR = 101;
 
+const int MAX_TOP_N = 50;
+
 
 void cleanup() {
     running = false;
@@ -91,9 +93,19 @@ vector<string> splitString(const string& str, char delimiter) {
     return tokens;
 }
 
+// Sends the whole fixed-size message, retrying on partial writes.
+// MSG_NOSIGNAL prevents a disconnected client from killing the server with SIGPIPE.
 bool sendMsg(int socket, Message& msg) {
-    int sent = send(socket, &msg, sizeof(Message), 0);
-    return sent > 0;
+    const char* buffer = (const char*)&msg;
+    size_t totalSent = 0;
+    while (totalSent < sizeof(Message)) {
+        ssize_t sent = send(socket, buffer + totalSent, sizeof(Message) - totalSent, MSG_NOSIGNAL);
+        if (sent <= 0) {
+            return false;
+        }
+        totalSent += sent;
+    }
+    return true;
 }
 
 bool recvMsg(int socket, Message& msg) {
@@ -109,7 +121,34 @@ bool recvMsg(int socket, Message& msg) {
         }
         bytesRead += result;
     }
+    // Never trust the client to null-terminate the payload.
+    msg.data[sizeof(msg.data) - 1] = '\0';
     return true;
+}
+
+// Clamps a client-supplied result count to a safe range.
+int parseTopN(const string& reqData, int defaultValue) {
+    int topN = defaultValue;
+    if (!reqData.empty()) {
+        topN = stoi(reqData);
+    }
+    if (topN < 1) topN = 1;
+    if (topN > MAX_TOP_N) topN = MAX_TOP_N;
+    return topN;
+}
+
+// Requests that act on a user's own data require an authenticated connection.
+bool requiresAuth(int type) {
+    switch (type) {
+    case GET_RECOMMENDATIONS:
+    case ADD_RATING:
+    case GET_USER_RATINGS:
+    case CHANGE_PASSWORD:
+    case LOGOUT:
+        return true;
+    default:
+        return false;
+    }
 }
 
 
@@ -188,11 +227,7 @@ void handleRecommendations(Message& request, Message& response) {
     lock_guard<mutex> engineLock(engineMutex);
 
     try {
-        int topN = 10;
-        string reqData(request.data);
-        if (!reqData.empty()) {
-            topN = stoi(reqData);
-        }
+        int topN = parseTopN(string(request.data), 10);
 
         vector<RecommendationResult> recs = engine->getRecommendations(request.userID, topN);
 
@@ -384,11 +419,7 @@ void handlePopular(Message& request, Message& response) {
     lock_guard<mutex> lock(engineMutex);
 
     try {
-        int topN = 15;
-        string reqData(request.data);
-        if (!reqData.empty()) {
-            topN = stoi(reqData);
-        }
+        int topN = parseTopN(string(request.data), 15);
 
         vector<RecommendationResult> popular = engine->recommendPopular(topN);
 
@@ -443,6 +474,10 @@ void handleLogout(Message& request, Message& response) {
 void handleClient(int clientSocket) {
     cout << "[Server] Client connected (thread: " << this_thread::get_id() << ")" << endl;
 
+    // The authenticated user for this connection. The userID field sent by the
+    // client is ignored: identity comes only from a successful LOGIN on this socket.
+    int sessionUserID = 0;
+
     while (running) {
         Message request, response;
         memset(&response, 0, sizeof(Message));
@@ -451,9 +486,23 @@ void handleClient(int clientSocket) {
             break;
         }
 
+        request.userID = sessionUserID;
+
+        if (requiresAuth(request.type) && sessionUserID == 0) {
+            response.type = ERROR;
+            copyToBuffer(response.data, "Not authenticated", sizeof(response.data));
+            if (!sendMsg(clientSocket, response)) {
+                break;
+            }
+            continue;
+        }
+
         switch (request.type) {
         case LOGIN:
             handleLogin(request, response);
+            if (response.type == SUCCESS) {
+                sessionUserID = response.userID;
+            }
             break;
         case REGISTER:
             handleRegister(request, response);
@@ -490,6 +539,7 @@ void handleClient(int clientSocket) {
             break;
         case LOGOUT:
             handleLogout(request, response);
+            sessionUserID = 0;
             break;
         default:
             response.type = ERROR;
@@ -502,16 +552,22 @@ void handleClient(int clientSocket) {
     }
 
     close(clientSocket);
+    if (sessionUserID != 0) {
+        lock_guard<mutex> lock(authMutex);
+        auth->logout(sessionUserID);
+    }
     cout << "[Server] Client disconnected (thread: " << this_thread::get_id() << ")" << endl;
 }
 
 int main(int argc, char* argv[]) {
     signal(SIGINT, handleSignal);
     signal(SIGTERM, handleSignal);
+    signal(SIGPIPE, SIG_IGN);
 
     int port = 8080;
     bool loadData = false;
     string dataPath = "../ml-100k";
+    string seedPassword = "movielens123";
 
     for (int i = 1; i < argc; i++) {
         string arg = argv[i];
@@ -521,6 +577,9 @@ int main(int argc, char* argv[]) {
         else if (arg == "--load" && i + 1 < argc) {
             loadData = true;
             dataPath = argv[++i];
+        }
+        else if (arg == "--seed-password" && i + 1 < argc) {
+            seedPassword = argv[++i];
         }
     }
 
@@ -534,7 +593,12 @@ int main(int argc, char* argv[]) {
 
     if (loadData) {
         cout << "[Server] Loading dataset from: " << dataPath << endl;
-        MovieLensParser parser(engine, auth, dataPath);
+        if (seedPassword.length() < 6) {
+            cerr << "[Server] --seed-password must be at least 6 characters" << endl;
+            cleanup();
+            return 1;
+        }
+        MovieLensParser parser(engine, auth, dataPath, seedPassword);
         if (!parser.parseAll()) {
             cerr << "[Server] Failed to load dataset" << endl;
             cleanup();

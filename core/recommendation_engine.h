@@ -229,6 +229,10 @@ private:
     }
 
     vector<RecommendationResult> recommendFromDisk(uint32_t userID, int topN) {
+        if (topN <= 0) {
+            return vector<RecommendationResult>();
+        }
+
         UserProfile* profile = buildUserProfile(userID);
 
         if (profile->totalRatings == 0) {
@@ -485,6 +489,14 @@ public:
         validateMovieID(movieID);
         validateRating(rating);
 
+        // Validate before touching the edge file so a bad ID can't leave a
+        // dangling rating on disk.
+        if (!movieExists(movieID)) {
+            throw runtime_error("Movie does not exist");
+        }
+        if (!userExists(userID)) {
+            throw runtime_error("User does not exist");
+        }
 
         float oldRating;
         bool hadRating = edgeManager->getRating(userID, movieID, oldRating);
@@ -534,6 +546,10 @@ public:
     }
 
     vector<RecommendationResult> recommendPopular(int topN = 10) {
+        if (topN <= 0) {
+            return vector<RecommendationResult>();
+        }
+
         priority_queue<MovieScore, vector<MovieScore>, greater<MovieScore>> minHeap;
 
         vector<uint32_t> allMovies = graphDB->getAllMovieIDs();

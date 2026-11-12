@@ -1,3 +1,5 @@
+import html
+import os
 import streamlit as st
 import socket
 import struct
@@ -201,8 +203,18 @@ LOGOUT = 14
 SUCCESS = 100
 ERROR = 101
 
+# Server address is configured via environment variables so no deployment
+# IP ever needs to be committed to the repository.
+SERVER_HOST = os.environ.get("MOVIE_SERVER_HOST", "127.0.0.1")
+SERVER_PORT = int(os.environ.get("MOVIE_SERVER_PORT", "8080"))
+
+
+def esc(value):
+    """Escape server-provided text before embedding it in HTML."""
+    return html.escape(str(value))
+
 class MovieClient:
-    def __init__(self, host='127.0.0.1', port=8080): # change port and ip for aws instance
+    def __init__(self, host=SERVER_HOST, port=SERVER_PORT):
         self.host = host
         self.port = port
         self.sock = None
@@ -241,16 +253,23 @@ class MovieClient:
             
             response = self.recv_all(8200)
             if not response:
+                self.close()
                 return None
             
             resp_type = struct.unpack('i', response[:4])[0]
             resp_user_id = struct.unpack('i', response[4:8])[0]
             resp_data = response[8:].rstrip(b'\x00').decode('utf-8', errors='ignore')
-            
+
+            # The server binds identity to the TCP connection. If the connection was
+            # re-established, the session is gone and the user must sign in again.
+            if resp_type == ERROR and resp_data == "Not authenticated":
+                st.session_state.logged_in = False
+                st.warning("Your session expired. Please sign in again.")
+
             return resp_type, resp_user_id, resp_data
         except Exception as e:
             st.error(f"Communication error: {e}")
-            self.sock = None
+            self.close()
             return None
     
     def close(self):
@@ -410,6 +429,17 @@ def show_recommendations():
                 
                 if resp_type == SUCCESS and resp_data and resp_data.strip():
                     lines = resp_data.strip().split('\n')
+
+                    # Raw engine scores are unbounded; show them relative to the best match.
+                    scores = []
+                    for l in lines:
+                        p = l.split('|')
+                        if len(p) >= 5:
+                            try:
+                                scores.append(float(p[2]))
+                            except ValueError:
+                                pass
+                    max_score = max(scores) if scores and max(scores) > 0 else 1.0
                     
                     st.markdown("---")
                     for idx, line in enumerate(lines[:top_n], 1):
@@ -423,11 +453,11 @@ def show_recommendations():
                             <div class="movie-card">
                                 <div style="display: flex; justify-content: space-between; align-items: center;">
                                     <div style="flex: 1;">
-                                        <div class="movie-title">{idx}. {title}</div>
-                                        <div class="movie-genres">🎭 {genres}</div>
+                                        <div class="movie-title">{idx}. {esc(title)}</div>
+                                        <div class="movie-genres">🎭 {esc(genres)}</div>
                                     </div>
                                     <div style="text-align: right; margin-left: 15px;">
-                                        <div class="match-score">{float(score):.1f}% Match</div>
+                                        <div class="match-score">{float(score) / max_score * 100:.0f}% Match</div>
                                     </div>
                                 </div>
                             </div>
@@ -459,8 +489,8 @@ def show_recommendations():
                                 <div class="movie-card">
                                     <div style="display: flex; justify-content: space-between; align-items: center;">
                                         <div style="flex: 1;">
-                                            <div class="movie-title">{idx}. {title}</div>
-                                            <div class="movie-genres">🔥 {genres}</div>
+                                            <div class="movie-title">{idx}. {esc(title)}</div>
+                                            <div class="movie-genres">🔥 {esc(genres)}</div>
                                         </div>
                                         <div style="text-align: right; margin-left: 15px;">
                                             <div class="rating-badge">⭐ {float(rating):.1f}</div>
@@ -496,7 +526,7 @@ def show_rate_movies():
                         
                         col1, col2 = st.columns([4, 1])
                         with col1:
-                            st.markdown(f'<div class="movie-title">{title}</div>', unsafe_allow_html=True)
+                            st.markdown(f'<div class="movie-title">{esc(title)}</div>', unsafe_allow_html=True)
                         with col2:
                             rating = st.selectbox(
                                 "Rate",
@@ -560,7 +590,7 @@ def show_my_ratings():
                         <div class="movie-card">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
                                 <div style="flex: 1;">
-                                    <div class="movie-title">{title}</div>
+                                    <div class="movie-title">{esc(title)}</div>
                                 </div>
                                 <div style="text-align: right; margin-left: 15px;">
                                     <div class="rating-badge">⭐ {float(rating):.1f}</div>
@@ -598,8 +628,8 @@ def show_search():
                             movie_id, title = parts[0], parts[1]
                             st.markdown(f"""
                             <div class="movie-card">
-                                <div class="movie-title">{title}</div>
-                                <div class="movie-genres">ID: {movie_id}</div>
+                                <div class="movie-title">{esc(title)}</div>
+                                <div class="movie-genres">ID: {esc(movie_id)}</div>
                             </div>
                             """, unsafe_allow_html=True)
                 else:
@@ -639,7 +669,7 @@ def show_search():
                                         <div class="movie-card">
                                             <div style="display: flex; justify-content: space-between; align-items: center;">
                                                 <div style="flex: 1;">
-                                                    <div class="movie-title">{title}</div>
+                                                    <div class="movie-title">{esc(title)}</div>
                                                 </div>
                                                 <div style="text-align: right; margin-left: 15px;">
                                                     <div class="rating-badge">⭐ {float(avg_rating):.1f}</div>
@@ -672,8 +702,8 @@ def show_popular():
                         <div class="movie-card">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
                                 <div style="flex: 1;">
-                                    <div class="movie-title">{idx}. {title}</div>
-                                    <div class="movie-genres">👥 {count} ratings</div>
+                                    <div class="movie-title">{idx}. {esc(title)}</div>
+                                    <div class="movie-genres">👥 {esc(count)} ratings</div>
                                 </div>
                                 <div style="text-align: right; margin-left: 15px;">
                                     <div class="rating-badge">⭐ {float(rating):.1f}</div>
